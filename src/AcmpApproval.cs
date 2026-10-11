@@ -937,6 +937,15 @@ class AcmpApproval
     // Ordner der laufenden EXE (= Installationsordner) fuer Copy-Paste-Anleitungen.
     static string InstallDir() { return AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'); }
 
+    // Copy-Paste-Konfiguration fuer MCP-Clients (Setup- und Onboarding-Seite).
+    void AppendClientSnippets(StringBuilder sb, string key)
+    {
+        string url = Esc(_publicUrl) + "/", k = Esc(key);
+        sb.Append("<p><b>Jeder MCP-Client</b> (Streamable HTTP): URL <code>").Append(url).Append("</code>, Header <code>Authorization: Bearer ").Append(k).Append("</code>. Vorlagen für Codex, VS Code/Copilot, Cursor, Gemini u. a.: <code>docs/CLIENTS.md</code> im Repo.</p>");
+        sb.Append("<p><b>Claude Code (CLI):</b></p><pre>claude mcp add --transport http acmp ").Append(url).Append(" --header \"Authorization: Bearer ").Append(k).Append("\" --scope user</pre>");
+        sb.Append("<p><b>Claude Desktop / Clients nur mit stdio</b> (Brücke mcp-remote, braucht Node.js):</p><pre>{\n  \"mcpServers\": {\n    \"acmp\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"").Append(url).Append("\", \"--header\", \"Authorization: Bearer ").Append(k).Append("\", \"--allow-http\"]\n    }\n  }\n}</pre>");
+    }
+
     static string Esc(string s)
     {
         if (s == null) return "";
@@ -1522,8 +1531,7 @@ class AcmpApproval
 
         sb.Append("<h2>1. MCP-Zugang für sein Claude/Codex</h2>");
         sb.Append("<p>Sein persönlicher API-Key:</p><p><input readonly style=\"width:100%;font-family:monospace\" value=\"").Append(Esc(newApiKey)).Append("\" onclick=\"this.select()\"></p>");
-        sb.Append("<p><b>Claude Code (CLI):</b></p><pre>claude mcp add --transport http acmp ").Append(Esc(_publicUrl)).Append("/ --header \"Authorization: Bearer ").Append(Esc(newApiKey)).Append("\"</pre>");
-        sb.Append("<p><b>Claude Desktop</b> (claude_desktop_config.json):</p><pre>{\n  \"mcpServers\": {\n    \"acmp\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"").Append(Esc(_publicUrl)).Append("/\", \"--header\", \"Authorization: Bearer ").Append(Esc(newApiKey)).Append("\"]\n    }\n  }\n}</pre>");
+        AppendClientSnippets(sb, newApiKey);
 
         sb.Append("<h2>2. ACMP-Identität verknüpfen (muss er selbst tun)</h2>");
         sb.Append("<p>Per RDP auf euren ACMP-Host verbinden, dort einmalig:</p>");
@@ -1647,8 +1655,7 @@ class AcmpApproval
         sb.Append("<div class=\"callout ok\" style=\"margin:12px 0;\"><b>Wichtig:</b> Diese Werte sind nur JETZT sichtbar — sicher aufbewahren.</div>");
 
         sb.Append("<h2>Dein MCP-API-Key</h2><p><input readonly style=\"width:100%;font-family:monospace\" value=\"").Append(Esc(newApiKey)).Append("\" onclick=\"this.select()\"></p>");
-        sb.Append("<p><b>Claude Code (CLI):</b></p><pre>claude mcp add --transport http acmp ").Append(Esc(_publicUrl)).Append("/ --header \"Authorization: Bearer ").Append(Esc(newApiKey)).Append("\"</pre>");
-        sb.Append("<p><b>Claude Desktop</b> (claude_desktop_config.json):</p><pre>{\n  \"mcpServers\": {\n    \"acmp\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"").Append(Esc(_publicUrl)).Append("/\", \"--header\", \"Authorization: Bearer ").Append(Esc(newApiKey)).Append("\"]\n    }\n  }\n}</pre>");
+        AppendClientSnippets(sb, newApiKey);
 
         sb.Append("<h2>Dein Freigabe-Login</h2><p><input readonly style=\"width:100%;font-family:monospace\" value=\"").Append(Esc(newApprovalToken)).Append("\" onclick=\"this.select()\"></p>");
         sb.Append("<p>Direkter Link: <code>").Append(Esc(_publicUrl)).Append("/dashboard?approver=").Append(Uri.EscapeDataString(name)).Append("&amp;token=").Append(Uri.EscapeDataString(newApprovalToken)).Append("</code> — am besten als Lesezeichen speichern.</p>");

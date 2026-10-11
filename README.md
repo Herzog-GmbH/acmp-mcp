@@ -1,14 +1,14 @@
 # ACMP-MCP-Server
 
-Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** ([Aagon Client Management Platform](https://www.aagon.com/)). Er stellt ACMP als Werkzeuge für Claude Code, Claude Desktop und andere MCP-Clients (z. B. Codex CLI) bereit: Clients, Container, Jobs/Client Commands, Tickets, Assets, Inventar und Stammdaten. Eingebaut sind eine **Vier-Augen-Freigabe** für schreibende, ausführende und löschende Aktionen und eine Weboberfläche zur Verwaltung.
+Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** ([Aagon Client Management Platform](https://www.aagon.com/)). Er stellt ACMP als Werkzeuge für jeden MCP-fähigen KI-Client bereit (Claude, ChatGPT/Codex, GitHub Copilot, Gemini, Cursor …): Clients, Container, Jobs/Client Commands, Tickets, Assets, Inventar und Stammdaten. Eingebaut sind eine **Vier-Augen-Freigabe** für schreibende, ausführende und löschende Aktionen und eine Weboberfläche zur Verwaltung.
 
 Er läuft als eigenständige Windows-EXE direkt auf eurem ACMP-Server: kein IIS, kein .NET-SDK, keine Cloud.
 
-> *English summary: MCP server for Aagon ACMP's Public API, with a built-in four-eyes approval gate for write/execute/delete actions. Runs as a single Windows EXE on the ACMP server. Docs are in German because ACMP's user base is mostly DACH; issues in English are welcome.*
+> *English summary: MCP server for Aagon ACMP's Public API, with a built-in four-eyes approval gate for write/execute/delete actions. Runs as a single Windows EXE on the ACMP server and works with any MCP client. Docs are in German because ACMP's user base is mostly DACH; issues in English are welcome.*
 
-## Am einfachsten: von Claude einrichten lassen
+## Am einfachsten: von eurer KI einrichten lassen
 
-Auf dem **ACMP-Server** das Repo klonen oder als ZIP entpacken, dort Claude Code (oder einen anderen Coding-Agenten) starten und Folgendes eingeben:
+Auf dem **ACMP-Server** das Repo klonen oder als ZIP entpacken. Dort einen KI-Agenten starten, der Befehle ausführen kann – egal welchen: Claude Code, OpenAI Codex CLI, GitHub Copilot (Agent-Modus in VS Code), Gemini CLI, Cursor o. Ä. Dann Folgendes eingeben:
 
 ```text
 Richte diesen ACMP-MCP-Server auf diesem Rechner ein. Folge AGENTS.md Schritt für Schritt,
@@ -16,7 +16,9 @@ erkläre mir jeden Admin-Schritt, bevor ich ihn ausführe, und frag mich nie nac
 oder API-Keys im Chat.
 ```
 
-[`AGENTS.md`](AGENTS.md) enthält den kompletten Ablauf für den Agenten: Prüfung, Installation, Ersteinrichtung, LAN-Freigabe, Client-Anbindung und Fehlersuche. Claude Code lädt die Datei automatisch über `CLAUDE.md`.
+[`AGENTS.md`](AGENTS.md) enthält den kompletten Ablauf für den Agenten: Prüfung, Installation, Ersteinrichtung, LAN-Freigabe, Client-Anbindung und Fehlersuche. Die meisten Agenten lesen `AGENTS.md` von selbst. Für Claude Code (`CLAUDE.md`), Gemini CLI (`GEMINI.md`) und GitHub Copilot (`.github/copilot-instructions.md`) liegen Verweise darauf bei.
+
+Ohne Agent geht es genauso, siehe nächster Abschnitt.
 
 ## Von Hand einrichten
 
@@ -31,7 +33,7 @@ oder API-Keys im Chat.
 .\install.ps1
 ```
 
-3. **Ersteinrichtung:** Am Ende zeigt das Skript einen Link `http://127.0.0.1:8765/setup?token=…`. Öffnet ihn auf dem Server im Browser und legt den ersten Administrator/Freigeber an. Der Server erzeugt API-Key und Freigabe-Token und zeigt die fertigen Befehle für Claude an. Danach den Dienst einmal neu starten.
+3. **Ersteinrichtung:** Am Ende zeigt das Skript einen Link `http://127.0.0.1:8765/setup?token=…`. Öffnet ihn auf dem Server im Browser und legt den ersten Administrator/Freigeber an. Der Server erzeugt API-Key und Freigabe-Token und zeigt die fertigen Befehle für Claude an. Für andere MCP-Clients siehe [`docs/CLIENTS.md`](docs/CLIENTS.md). Danach den Dienst einmal neu starten.
 4. **Eigene ACMP-Identität** (empfohlen): `C:\ProgramData\AcmpMcp\acmp-token-setup.exe`. Dann prüft ACMP die Rechte des jeweiligen Bedieners, statt alles als SICS-Admin auszuführen.
 5. **Im LAN freigeben:** `.\set-network-admin.ps1 -BindAddress <LAN-IP> -AllowedSubnets "<Admin-Netz>/24"`
 6. **Weitere Kolleg:innen** legt ihr über `http://<HOST>:8765/onboarding` an, ohne JSON zu bearbeiten.
@@ -40,24 +42,12 @@ Aktualisieren: `git pull`, dann erneut `.\install.ps1`. Die Konfiguration bleibt
 
 ## Client anbinden
 
-Die Setup- bzw. Onboarding-Seite zeigt die Befehle mit eurem Key fertig an. Platzhalter: `<HOST>` = euer ACMP-Server, `<KEY>` = persönlicher API-Key.
+Jeder MCP-Client, der **Streamable HTTP** mit eigenem Header kann, verbindet sich direkt:
 
-**Claude Code:**
-```
-claude mcp add --transport http acmp http://<HOST>:8765/ --header "Authorization: Bearer <KEY>" --scope user
-```
+- **URL:** `http://<HOST>:8765/`
+- **Header:** `Authorization: Bearer <KEY>` (persönlicher API-Key von der Setup- bzw. Onboarding-Seite)
 
-**Claude Desktop** (`claude_desktop_config.json`, Brücke `mcp-remote`, braucht Node.js; `--allow-http` ist nötig, weil der Server kein TLS spricht):
-```json
-{
-  "mcpServers": {
-    "acmp": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://<HOST>:8765/", "--header", "Authorization: Bearer <KEY>", "--allow-http"]
-    }
-  }
-}
-```
+Fertige Konfigurationen für Claude Code, Claude Desktop, Codex CLI, VS Code/GitHub Copilot, Cursor und Gemini CLI stehen in [`docs/CLIENTS.md`](docs/CLIENTS.md). Clients, die nur lokale (stdio) Server kennen, binden ihr über die Brücke `mcp-remote` an.
 
 ## Funktionsweise
 

@@ -1,4 +1,4 @@
-# Anleitung für KI-Agenten (Claude Code, Codex, …)
+# Anleitung für KI-Agenten (Claude Code, Codex, GitHub Copilot, Gemini CLI, Cursor, …)
 
 Ein Mensch hat dich gebeten, diesen ACMP-MCP-Server auf seinem ACMP-Server einzurichten. Diese Datei ist dein Ablauf. Arbeite die Schritte der Reihe nach ab und melde nach jedem Schritt kurz den Stand.
 
@@ -39,7 +39,7 @@ Get-Content C:\ProgramData\AcmpMcp\server.log -Tail 30
 `server.log` liegt in einem Ordner nur für Administratoren. Kannst du ihn nicht lesen, bitte den Menschen, die letzten Zeilen einzufügen. Vorher soll er die Zeile mit `setup?token=` entfernen.
 
 ## Schritt 3 – Ersteinrichtung (Mensch, im Browser auf dem Server)
-Den Setup-Link aus Schritt 2 (`http://127.0.0.1:8765/setup?token=…`) öffnen und den ersten Administrator/Freigeber anlegen. Die Seite zeigt danach die fertigen Befehle für Claude Code bzw. Desktop an, inklusive persönlichem API-Key. Der Mensch kopiert sie selbst.
+Den Setup-Link aus Schritt 2 (`http://127.0.0.1:8765/setup?token=…`) öffnen und den ersten Administrator/Freigeber anlegen. Die Seite zeigt danach den persönlichen API-Key und fertige Befehle für Claude Code bzw. Desktop an. Vorlagen für andere Clients stehen in `docs/CLIENTS.md`. Der Mensch kopiert sie selbst.
 
 Danach Dienst neu starten (Mensch, Admin):
 ```powershell
@@ -62,11 +62,8 @@ cd C:\ProgramData\AcmpMcp
 Empfiehl, die erlaubten Quell-Subnetze auf die Admin-Arbeitsplätze zu beschränken. Weise darauf hin, dass der Server nur **HTTP** spricht. Über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor.
 
 ## Schritt 6 – Client verbinden und testen
-Den Befehl von der Setup- bzw. Onboarding-Seite führt der Mensch auf **seinem** PC aus, zum Beispiel:
-```
-claude mcp add --transport http acmp http://<HOST>:8765/ --header "Authorization: Bearer <KEY>" --scope user
-```
-Danach testest du mit `acmp_whoami` und `acmp_server_info`, beide sind reine Lesetools. Ein schreibendes Tool muss eine **Anfrage-Id** liefern und keine rohe ACMP-Antwort. Kommt eine rohe Antwort, ist die Freigabe aus. Melde das.
+Der Mensch richtet den Client auf **seinem** PC ein. Passende Konfigurationen für die gängigen MCP-Clients stehen in `docs/CLIENTS.md`. Übernimm die Vorlage für den Client, den der Mensch nutzt. Den Key trägt er selbst ein.
+Danach testet ihr mit `acmp_whoami` und `acmp_server_info`, beide sind reine Lesetools. Ein schreibendes Tool muss eine **Anfrage-Id** liefern und keine rohe ACMP-Antwort. Kommt eine rohe Antwort, ist die Freigabe aus. Melde das.
 
 Weitere Kolleg:innen legt ein Freigeber unter `http://<HOST>:8765/onboarding` an.
 

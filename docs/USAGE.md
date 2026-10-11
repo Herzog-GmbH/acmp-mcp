@@ -1,8 +1,8 @@
 # ACMP-MCP – Anwender-Cheat-Sheet
 
-Sie reden in normaler Sprache mit Claude; Claude wählt die passenden ACMP-Tools. Diese Liste
+Sie reden in normaler Sprache mit Ihrer KI (Claude, Codex, Copilot, Gemini …); sie wählt die passenden ACMP-Tools. Diese Liste
 zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/Ausführen/Löschen**
-ändert echte Daten bzw. startet Aktionen auf Rechnern – Claude fragt vorher kurz nach.
+ändert echte Daten bzw. startet Aktionen auf Rechnern – die KI sollte vorher kurz nachfragen, und die Vier-Augen-Freigabe greift ohnehin.
 
 ## Allgemein / Orientierung
 - „Welche ACMP-Kommandos gibt es?" → kompletter Katalog (167)
@@ -21,7 +21,7 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 ## 2) Jobs / Client Commands
 - „Welche Client Commands / Scripts gibt es?" → **GetClientCommandList** (liefert Id + Name)
 - „Führe das Client Command ‚7-Zip' auf dem Client PC-0815 aus." → **EnqueueClientCommand** (FÜHRT AUS)
-  - Claude holt sich die `ClientCommandId` (aus der Command-Liste) und die `ClientId` (aus der Client-Liste) selbst.
+  - Die KI holt sich die `ClientCommandId` (aus der Command-Liste) und die `ClientId` (aus der Client-Liste) selbst.
 - „Welche Jobs laufen gerade auf Client PC-0815?" → **GetJobs** (braucht die ClientId)
 
 ## 3) Inventar / Assets / Reports
@@ -41,7 +41,7 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 - „Schließe Ticket #1234." → CloseTicket
 
 ## Wenn etwas nicht klappt
-- ACMP liefert sprechende Fehler, z.B. *„ClientCommandId: Value may not be empty"* – Claude erkennt
+- ACMP liefert sprechende Fehler, z.B. *„ClientCommandId: Value may not be empty"* – die KI erkennt
   daran fehlende Pflichtfelder und korrigiert sich. Sagen Sie ggf. „probier's nochmal, das Feld fehlt".
-- Für seltene/komplexe Kommandos nutzt Claude `acmp_describe <Kommando>` und dann `acmp_call`.
+- Für seltene/komplexe Kommandos nutzt die KI `acmp_describe <Kommando>` und dann `acmp_call`.
 - **Alle 167 Kommandos** sind über `acmp_call` erreichbar – auch die, für die es kein eigenes Tool gibt.
