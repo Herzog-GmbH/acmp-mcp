@@ -1,4 +1,4 @@
-# ACMP-MCP-Server: gefuehrte Einrichtung im Terminal (auf dem ACMP-Server, ALS ADMINISTRATOR).
+# ACMP-MCP-Server: gefuehrte Einrichtung im Terminal (auf dem ACMP-Server; startet sich bei Bedarf selbst mit Admin-Rechten neu).
 #
 #   .\install.ps1 -CheckOnly        Nur Voraussetzungen pruefen, nichts veraendern (kein Admin noetig)
 #   .\install.ps1                   Assistent: installieren, ersten Administrator anlegen, LAN-Freigabe,
@@ -24,6 +24,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 . (Join-Path $repo "wizard-lib.ps1")
+if (-not $CheckOnly) { Invoke-SelfElevate $PSCommandPath $PSBoundParameters }
+if ($AllowedSubnets) { $AllowedSubnets = Split-ListArg $AllowedSubnets }
 $ask = -not $NonInteractive
 $T = 9
 
@@ -75,7 +77,7 @@ Write-Ok "Public API bestaetigt"
 Write-Step 3 $T "Dateien installieren und bauen"
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" | Out-Null
-Write-Ok "$InstallDir (nur Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
+Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
   foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1") {
@@ -83,6 +85,13 @@ if (-not $sameDir) {
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null
   Copy-Item (Join-Path $repo "docs\*.md") (Join-Path $InstallDir "docs") -Force
+}
+# Normale Benutzer: Ordner auflisten + Start-Skripte lesen (damit sie sich per UAC selbst erhoehen koennen).
+# Config, Secrets, Logs und EXEs bleiben nur fuer Administratoren/SYSTEM lesbar.
+icacls $InstallDir /grant "*S-1-5-32-545:(RX)" | Out-Null
+foreach ($f in "add-user.ps1","wizard-lib.ps1","set-network-admin.ps1") {
+  $fp = Join-Path $InstallDir $f
+  if (Test-Path $fp) { icacls $fp /grant "*S-1-5-32-545:(RX)" | Out-Null }
 }
 $exe = Join-Path $InstallDir "AcmpMcpServer.exe"
 $firstInstall = -not (Test-Path $exe)

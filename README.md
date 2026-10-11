@@ -24,7 +24,7 @@ Ohne Agent geht es genauso, siehe nächster Abschnitt.
 
 **Voraussetzungen:** ACMP mit AESB/SICS (getestet mit ACMP 6.9), Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server.
 
-Auf dem ACMP-Server eine PowerShell **als Administrator** öffnen, ins Repo wechseln und starten:
+Auf dem ACMP-Server eine PowerShell öffnen, ins Repo wechseln und starten. Fehlen Admin-Rechte, startet sich das Skript nach einer Windows-Abfrage (UAC) selbst neu:
 
 ```powershell
 .\install.ps1

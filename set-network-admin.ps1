@@ -8,8 +8,10 @@ param(
   [Parameter(Mandatory = $true)][string]$BindAddress,
   [string[]]$AllowedSubnets = @("LocalSubnet")
 )
-#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot "wizard-lib.ps1")
+Invoke-SelfElevate $PSCommandPath $PSBoundParameters
+$AllowedSubnets = Split-ListArg $AllowedSubnets
 $cfgPath = Join-Path $PSScriptRoot "config.local.json"
 $cfg  = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $port = if ($cfg.mcp.httpPort) { $cfg.mcp.httpPort } else { 8765 }

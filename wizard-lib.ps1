@@ -58,6 +58,43 @@ function Test-IsAdmin {
   ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Startet das aufrufende Skript mit Admin-Rechten neu (UAC-Abfrage), falls noetig.
+# Aufruf direkt nach dem Laden der Bibliothek:  Invoke-SelfElevate $PSCommandPath $PSBoundParameters
+# Kehrt nur zurueck, wenn bereits Admin-Rechte vorhanden sind; sonst wird das neue Fenster
+# gestartet und dieses Skript beendet.
+function Get-ElevateArgs([string]$scriptPath, $boundParams) {
+  $argList = @('-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $scriptPath))
+  foreach ($kv in $boundParams.GetEnumerator()) {
+    $v = $kv.Value
+    if ($v -is [switch] -or $v -is [bool]) { if ($v) { $argList += "-$($kv.Key)" }; continue }
+    if ($v -is [array]) { $v = ($v -join ',') }
+    $argList += "-$($kv.Key)"
+    $argList += ('"{0}"' -f ("$v" -replace '"', '\"'))
+  }
+  ,$argList
+}
+
+function Invoke-SelfElevate([string]$scriptPath, $boundParams) {
+  if (Test-IsAdmin) { return }
+  $argList = Get-ElevateArgs $scriptPath $boundParams
+  Write-Host ""
+  Write-Host "  Dieses Skript braucht Administrator-Rechte. Es startet sich jetzt in einem neuen Fenster" -ForegroundColor Yellow
+  Write-Host "  mit Admin-Rechten neu - bitte die Windows-Abfrage (UAC) bestaetigen." -ForegroundColor Yellow
+  try {
+    Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $argList -ErrorAction Stop | Out-Null
+    Write-Host "  Weiter im neuen Fenster." -ForegroundColor Green
+  } catch {
+    Write-Host "  Abgebrochen oder nicht erlaubt: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  Alternativ: PowerShell per Rechtsklick 'Als Administrator ausfuehren' und das Skript dort starten." -ForegroundColor Gray
+  }
+  exit
+}
+
+# "-AllowedSubnets a,b" kommt beim Neustart ueber -File als EIN String an -> wieder aufteilen.
+function Split-ListArg([string[]]$values) {
+  @($values | ForEach-Object { "$_" -split '\s*,\s*' } | Where-Object { $_ })
+}
+
 # ---------------------------------------------------------------- Config
 function Read-AcmpConfig([string]$path) { Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json }
 

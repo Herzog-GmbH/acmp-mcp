@@ -1,4 +1,4 @@
-# Weiteren Bediener fuer den ACMP-MCP-Server anlegen (ALS ADMINISTRATOR, im Installationsordner).
+# Weiteren Bediener fuer den ACMP-MCP-Server anlegen (braucht Admin-Rechte - startet sich bei Bedarf selbst erhoeht neu).
 #   cd C:\ProgramData\AcmpMcp
 #   .\add-user.ps1
 #   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm -Approver -Email m.mustermann@firma.de
@@ -12,10 +12,10 @@ param(
   [string]$Email,
   [switch]$NonInteractive
 )
-#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $base = $PSScriptRoot
 . (Join-Path $base "wizard-lib.ps1")
+Invoke-SelfElevate $PSCommandPath $PSBoundParameters
 $ask = -not $NonInteractive
 $cfgPath = Join-Path $base "config.local.json"
 if (-not (Test-Path $cfgPath)) { Write-Bad "config.local.json fehlt - zuerst install.ps1 ausfuehren."; exit 1 }
