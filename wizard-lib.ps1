@@ -99,7 +99,8 @@ function Add-McpUser([string]$cfgPath, [string]$name, [string]$acmpUser, [bool]$
   Set-CfgProp $cfg.mcp "users" (@($cfg.mcp.users | Where-Object { $_ }) + $nu)
   if ($isApprover) {
     $na = [pscustomobject]@{ name = $name; token = $approvalToken; email = $email }
-    Set-CfgProp $cfg.approval "approvers" (@(Get-Approvers $cfg) + $na)
+    # Nur anhaengen - vorhandene Eintraege bleiben unveraendert (auch unvollstaendige/Platzhalter)
+    Set-CfgProp $cfg.approval "approvers" (@($cfg.approval.approvers | Where-Object { $_ }) + $na)
   }
   Save-AcmpConfig $cfg $cfgPath
   [pscustomobject]@{ Name = $name; ApiKey = $apiKey; ApprovalToken = $approvalToken; AcmpUser = $acmpUser }
