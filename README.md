@@ -20,25 +20,46 @@ oder API-Keys im Chat.
 
 Ohne Agent geht es genauso, siehe nächster Abschnitt.
 
-## Von Hand einrichten
+## Von Hand einrichten: der Assistent im Terminal
 
-**Voraussetzungen:** ACMP mit AESB/SICS (getestet mit ACMP 6.9), Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server. In der ACMP-Konsole muss die Public API freigeschaltet sein (→ [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md)).
+**Voraussetzungen:** ACMP mit AESB/SICS (getestet mit ACMP 6.9), Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server.
+
+Auf dem ACMP-Server eine PowerShell **als Administrator** öffnen, ins Repo wechseln und starten:
 
 ```powershell
-# 1. Prüfen (verändert nichts)
-.\install.ps1 -CheckOnly
-
-# 2. Installieren (PowerShell als Administrator) - fragt den SICS-Benutzer ab,
-#    installiert nach C:\ProgramData\AcmpMcp, Autostart als geplante Aufgabe
 .\install.ps1
 ```
 
-3. **Ersteinrichtung:** Am Ende zeigt das Skript einen Link `http://127.0.0.1:8765/setup?token=…`. Öffnet ihn auf dem Server im Browser und legt den ersten Administrator/Freigeber an. Der Server erzeugt API-Key und Freigabe-Token und zeigt die fertigen Befehle für Claude an. Für andere MCP-Clients siehe [`docs/CLIENTS.md`](docs/CLIENTS.md). Danach den Dienst einmal neu starten.
-4. **Eigene ACMP-Identität** (empfohlen): `C:\ProgramData\AcmpMcp\acmp-token-setup.exe`. Dann prüft ACMP die Rechte des jeweiligen Bedieners, statt alles als SICS-Admin auszuführen.
-5. **Im LAN freigeben:** `.\set-network-admin.ps1 -BindAddress <LAN-IP> -AllowedSubnets "<Admin-Netz>/24"`
-6. **Weitere Kolleg:innen** legt ihr über `http://<HOST>:8765/onboarding` an, ohne JSON zu bearbeiten.
+Der Assistent führt in 9 Schritten durch alles. Bei jedem Schritt erklärt er, was passiert, und schlägt Werte vor (Enter übernimmt):
 
-Aktualisieren: `git pull`, dann erneut `.\install.ps1`. Die Konfiguration bleibt erhalten. Entfernen: `C:\ProgramData\AcmpMcp\uninstall-admin.ps1`.
+1. **Prüft die Voraussetzungen** (AESB SICS, Port 3950, .NET, freier Port). Bei einem Fehler sagt er, was zu tun ist.
+2. **Fragt nach der Public API** in der ACMP-Konsole und zeigt den Klickpfad.
+3. **Installiert und baut** nach `C:\ProgramData\AcmpMcp`. Der Ordner ist nur für Administratoren und SYSTEM zugänglich.
+4. **Fragt den SICS-Benutzer ab.** Das Passwort wird verdeckt eingegeben.
+5. **Richtet den Dienst ein und prüft die Anmeldung an ACMP.** Klappt sie nicht, fragt er die Zugangsdaten erneut ab.
+6. **Legt dich als ersten Administrator und Freigeber an.**
+7. **Verknüpft deine eigene ACMP-Identität**, wenn du das möchtest. Dann prüft ACMP deine echten Rechte.
+8. **Optionale Funktionen:** Ad-hoc-PowerShell, DB-Reports, E-Mail-Benachrichtigung.
+9. **Netzwerk:** schlägt LAN-IP und Subnetz vor und gibt den Server für die Admin-PCs frei.
+
+Zum Schluss testet er die Verbindung und zeigt **deinen API-Key, die Links zur Freigabe-Seite, zum Dashboard und zum Onboarding**. Auf Wunsch kopiert er den Key in die Zwischenablage. Danach fragt er, welchen KI-Client du nutzt, und zeigt die fertige Konfiguration dafür.
+
+Weitere Kolleg:innen legt ihr genauso im Terminal an, oder im Browser über `/onboarding`:
+
+```powershell
+cd C:\ProgramData\AcmpMcp
+.\add-user.ps1
+```
+
+| Befehl | Zweck |
+|---|---|
+| `.\install.ps1 -CheckOnly` | nur prüfen, nichts verändern (kein Admin nötig) |
+| `.\install.ps1` | erneut ausführen = aktualisieren. Konfiguration und Bediener bleiben erhalten, Erledigtes wird übersprungen |
+| `.\install.ps1 -NonInteractive -SicsUser … -AdminName … -AdminEmail …` | ohne Rückfragen, z. B. für Skripte. Das Passwort kommt aus `$env:ACMP_SICS_PASSWORD` |
+| `.\set-network-admin.ps1 -BindAddress <IP>` | Netzwerk später ändern |
+| `.\uninstall-admin.ps1` | Dienst und Firewall-Regel entfernen |
+
+Die Klicks in der ACMP-Konsole beschreibt [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md), zum Beispiel für die Client-Command-Vorlage der Ad-hoc-PowerShell.
 
 ## Client anbinden
 

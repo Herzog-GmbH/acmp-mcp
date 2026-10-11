@@ -150,7 +150,7 @@ static class AcmpMcp
 
         // Optionale read-only DB-Anbindung fuer Report-Tools
         string dbCs = (cfg["db"] != null && cfg["db"]["connectionString"] != null) ? (string)cfg["db"]["connectionString"] : null;
-        if (dbCs != null && dbCs.StartsWith("HIER_")) dbCs = null;
+        if (dbCs != null && (dbCs.Length == 0 || dbCs.Contains("HIER_"))) dbCs = null;   // Platzhalter aus config.example.json
         DB = new AcmpDb(dbCs);
         Log("DB-Report-Tools: " + (DB.Enabled ? "aktiv" : "aus (keine db.connectionString gesetzt)"));
         Log("acmp_run_powershell: " + (PsCommandId != null ? "aktiv (Vorlage " + PsCommandId + ", Variable " + PsVariableName + ")" : "aus (runPowershell.clientCommandId nicht gesetzt)"));

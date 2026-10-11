@@ -3,7 +3,8 @@
 # jedem Systemstart) ein. Optional: -AllowedSubnets fuer die erlaubten Quell-Subnetze
 # (Default: nur das lokale Subnetz), z.B. -AllowedSubnets "10.0.0.0/24","10.0.1.0/24".
 param(
-  [string[]]$AllowedSubnets = @("LocalSubnet")
+  [string[]]$AllowedSubnets = @("LocalSubnet"),
+  [switch]$NoStart   # nur registrieren, nicht starten/testen (nutzt install.ps1)
 )
 #Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
@@ -28,6 +29,7 @@ $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccou
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 9999 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName "ACMP-MCP-Server" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+if ($NoStart) { Write-Host "   OK - Aufgabe registriert (noch nicht gestartet)." -ForegroundColor Green; return }
 Start-ScheduledTask -TaskName "ACMP-MCP-Server"
 Start-Sleep -Seconds 6
 Write-Host "   OK - Aufgabe registriert und gestartet." -ForegroundColor Green

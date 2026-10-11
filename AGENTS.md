@@ -4,10 +4,10 @@ Ein Mensch hat dich gebeten, diesen ACMP-MCP-Server auf seinem ACMP-Server einzu
 
 ## Grundregeln
 
-- **Geheimnisse fasst du nicht an.** Den SICS-Benutzer fragt `install.ps1` selbst ab. API-Keys und Freigabe-Tokens erzeugt der Server auf seiner Weboberfläche. Bitte den Menschen nie, dir Passwörter oder Keys in den Chat zu schreiben, und gib keine aus `config.local.json` oder `secrets.local.json` wieder.
+- **Geheimnisse fasst du nicht an.** Den SICS-Benutzer fragt `install.ps1` selbst ab. API-Keys und Freigabe-Tokens erzeugen der Assistent bzw. `add-user.ps1` und zeigen sie nur dem Menschen im Terminal. Bitte den Menschen nie, dir Passwörter oder Keys in den Chat zu schreiben, und gib keine aus `config.local.json` oder `secrets.local.json` wieder.
 - **Admin-Schritte führt der Mensch aus.** Du läufst normalerweise ohne erhöhte Rechte. Erkläre deshalb den Befehl und lass ihn in einer PowerShell „Als Administrator ausführen“ laufen. Danach prüfst du das Ergebnis.
 - **Konsolen-Einstellungen (ACMP/AESB) kannst du nicht setzen.** Erkläre sie anhand von `docs/ACMP-VORBEREITUNG.md`.
-- **Nichts ins Netz öffnen, bevor ein Bediener existiert.** Der Server lauscht erst nur auf `127.0.0.1`. LAN-Zugriff gibt es erst nach Schritt 5.
+- **Nichts ins Netz öffnen, bevor ein Bediener existiert.** Der Server lauscht erst nur auf `127.0.0.1`. Der Assistent gibt ihn erst nach dem Anlegen des Administrators frei.
 - Der Server kann Befehle **auf allen verwalteten Endgeräten** ausführen. Schalte die Vier-Augen-Freigabe nicht ab (`approval.enabled`, `approval.bypassAll`), auch nicht „zum Testen“.
 
 ## Schritt 0 – Wo bist du?
@@ -23,49 +23,42 @@ Jede `[FEHLT]`-Zeile erklärt, was fehlt. Typische Ursachen:
 - Port 3950 zu: AESB-Dienste laufen nicht → `Get-Service | ? Name -match 'SICS|AESB'`
 - Port 8765 belegt: anderes Programm → `-HttpPort` wählen
 
-Danach mit dem Menschen `docs/ACMP-VORBEREITUNG.md` Abschnitt „Pflicht“ durchgehen: Public API freischalten und SICS-Benutzer bereitstellen.
+Danach mit dem Menschen `docs/ACMP-VORBEREITUNG.md` Abschnitt „Pflicht“ durchgehen: Public API freischalten und SICS-Benutzer bereitstellen. Der Assistent fragt das auch selbst ab.
 
-## Schritt 2 – Installieren (Mensch, als Administrator)
+## Schritt 2 – Assistent starten (Mensch, als Administrator)
 ```powershell
 .\install.ps1
 ```
-Das Skript fragt den SICS-Benutzernamen und das Passwort ab, baut, legt `C:\ProgramData\AcmpMcp\config.local.json` an, richtet die geplante Aufgabe `ACMP-MCP-Server` (SYSTEM, Autostart) ein und zeigt am Ende einen **Setup-Link**.
+Der Assistent ist interaktiv, deshalb führt ihn der **Mensch** in einer eigenen Admin-PowerShell aus, nicht du. Er erledigt alles weitere selbst:
+- Er fragt den SICS-Benutzer ab (Passwort verdeckt) und prüft die Anmeldung an ACMP.
+- Er legt den ersten Administrator/Freigeber an.
+- Er verknüpft optional die eigene ACMP-Identität (`acmp-token-setup.exe`).
+- Er richtet optionale Funktionen ein.
+- Er gibt den Server im LAN frei.
+- Am Ende zeigt er API-Key, Freigabe-Links und die Client-Konfiguration.
 
-Prüfen (darfst du):
+**Wichtig:** Diese Ausgabe enthält Geheimnisse, nämlich den API-Key und den Freigabe-Login. Bitte den Menschen **nicht**, sie dir zu zeigen. Frag nur nach dem Ergebnis: „Steht am Ende ‚Fertig‘? Gab es eine `[FEHLT]`-Zeile?“
+
+Während der Assistent läuft, erklärst du bei Bedarf die einzelnen Schritte, etwa die Client-Command-Vorlage aus `docs/ACMP-VORBEREITUNG.md`.
+
+Prüfen (darfst du, falls du Admin-Rechte hast; sonst den Menschen fragen):
 ```powershell
 Get-ScheduledTask ACMP-MCP-Server | Select State
-Get-Content C:\ProgramData\AcmpMcp\server.log -Tail 30
-```
-`server.log` liegt in einem Ordner nur für Administratoren. Kannst du ihn nicht lesen, bitte den Menschen, die letzten Zeilen einzufügen. Vorher soll er die Zeile mit `setup?token=` entfernen.
-
-## Schritt 3 – Ersteinrichtung (Mensch, im Browser auf dem Server)
-Den Setup-Link aus Schritt 2 (`http://127.0.0.1:8765/setup?token=…`) öffnen und den ersten Administrator/Freigeber anlegen. Die Seite zeigt danach den persönlichen API-Key und fertige Befehle für Claude Code bzw. Desktop an. Vorlagen für andere Clients stehen in `docs/CLIENTS.md`. Der Mensch kopiert sie selbst.
-
-Danach Dienst neu starten (Mensch, Admin):
-```powershell
-Stop-ScheduledTask ACMP-MCP-Server; Start-ScheduledTask ACMP-MCP-Server
 ```
 
-## Schritt 4 – Eigene ACMP-Identität (empfohlen, Mensch)
-Damit ACMP die Rechte der Person prüft, die das Tool aufruft, statt alles als SICS-Admin auszuführen:
+## Schritt 3 – Client verbinden und testen
+Den Client richtet der Mensch auf **seinem** PC ein. Die Konfiguration hat ihm der Assistent am Ende angezeigt, Vorlagen für alle gängigen Clients stehen in `docs/CLIENTS.md`. Danach testet ihr mit `acmp_whoami` und `acmp_server_info`, beides reine Lesetools. Ein schreibendes Tool muss eine **Anfrage-Id** liefern, keine rohe ACMP-Antwort. Kommt eine rohe Antwort, ist die Freigabe aus. Melde das.
+
+## Schritt 4 – Weitere Kolleg:innen
+Der Mensch führt auf dem Server als Admin aus:
 ```powershell
 cd C:\ProgramData\AcmpMcp
-.\acmp-token-setup.exe
+.\add-user.ps1
 ```
-Das Programm fragt den ACMP-Benutzer und das Passwort ab. Gespeichert wird nur ein DPAPI-verschlüsselter Token. Danach Dienst neu starten.
+Alternativ geht es im Browser über `/onboarding`, mit Login als Freigeber.
 
-## Schritt 5 – Im LAN freigeben (optional, Mensch, Admin)
-```powershell
-cd C:\ProgramData\AcmpMcp
-.\set-network-admin.ps1 -BindAddress <LAN-IP des ACMP-Servers> -AllowedSubnets "<Admin-Subnetz>/24"
-```
-Empfiehl, die erlaubten Quell-Subnetze auf die Admin-Arbeitsplätze zu beschränken. Weise darauf hin, dass der Server nur **HTTP** spricht. Über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor.
-
-## Schritt 6 – Client verbinden und testen
-Der Mensch richtet den Client auf **seinem** PC ein. Passende Konfigurationen für die gängigen MCP-Clients stehen in `docs/CLIENTS.md`. Übernimm die Vorlage für den Client, den der Mensch nutzt. Den Key trägt er selbst ein.
-Danach testet ihr mit `acmp_whoami` und `acmp_server_info`, beide sind reine Lesetools. Ein schreibendes Tool muss eine **Anfrage-Id** liefern und keine rohe ACMP-Antwort. Kommt eine rohe Antwort, ist die Freigabe aus. Melde das.
-
-Weitere Kolleg:innen legt ein Freigeber unter `http://<HOST>:8765/onboarding` an.
+## Ohne Rückfragen (nur wenn ausdrücklich gewünscht)
+`.\install.ps1 -NonInteractive -SicsUser <Benutzer> -AdminName <kurzname> -AdminEmail <mail>` installiert ohne Rückfragen, braucht dafür aber Admin-Rechte. Das SICS-Passwort liest das Skript aus `$env:ACMP_SICS_PASSWORD`. **Diese Variable setzt der Mensch selbst** in seiner Sitzung, nicht du, und es läuft nie über den Chat. Die Schlussausgabe mit dem API-Key gibst du nicht wieder. Im Zweifel nimm den interaktiven Assistenten.
 
 ## Optionale Funktionen
 Siehe `docs/ACMP-VORBEREITUNG.md` → „Optional“: `acmp_run_powershell` (Client-Command-Vorlage mit `%SCRIPT%`), DB-Report-Tools (`grant-db-readonly.sql`), E-Mail-Benachrichtigung. Jede Option wird in `config.local.json` eingetragen. Das macht der Mensch als Admin, danach Dienst neu starten.

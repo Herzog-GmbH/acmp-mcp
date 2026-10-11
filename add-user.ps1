@@ -1,0 +1,82 @@
+# Weiteren Bediener fuer den ACMP-MCP-Server anlegen (ALS ADMINISTRATOR, im Installationsordner).
+#   cd C:\ProgramData\AcmpMcp
+#   .\add-user.ps1
+#   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm -Approver -Email m.mustermann@firma.de
+#
+# Wie /onboarding auf der Weboberflaeche, nur im Terminal: erzeugt MCP-API-Key und optional
+# einen Freigabe-Login, startet den Dienst neu und zeigt am Ende Links und Client-Konfiguration.
+param(
+  [string]$Name,
+  [string]$AcmpUser,
+  [switch]$Approver,
+  [string]$Email,
+  [switch]$NonInteractive
+)
+#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+$base = $PSScriptRoot
+. (Join-Path $base "wizard-lib.ps1")
+$ask = -not $NonInteractive
+$cfgPath = Join-Path $base "config.local.json"
+if (-not (Test-Path $cfgPath)) { Write-Bad "config.local.json fehlt - zuerst install.ps1 ausfuehren."; exit 1 }
+
+Write-Title "ACMP-MCP-Server - neuen Bediener anlegen"
+$cfg = Read-AcmpConfig $cfgPath
+$existing = @(Get-McpUsers $cfg)
+$apprNames = @(Get-Approvers $cfg | ForEach-Object { $_.name })
+if ($existing.Count) {
+  Write-Info "Vorhandene Bediener:"
+  foreach ($u in $existing) { Write-Info ("  - {0,-20} ACMP: {1,-16} Freigeber: {2}" -f $u.name, $(if ($u.acmpUser) { $u.acmpUser } else { "-" }), $(if ($apprNames -contains $u.name) { "ja" } else { "-" })) }
+}
+
+Write-Step 1 3 "Angaben"
+$idRe = '^[A-Za-z0-9_.-]{2,32}$'
+if (-not $Name) {
+  if (-not $ask) { throw "-Name fehlt." }
+  while ($true) {
+    $Name = Read-Value "Kurzname (z.B. mmustermann)" "" $idRe "Nur Buchstaben, Zahlen und . _ - (2-32 Zeichen)."
+    if ($existing | Where-Object { $_.name -ieq $Name }) { Write-Hint "'$Name' gibt es schon." } else { break }
+  }
+}
+if (-not $PSBoundParameters.ContainsKey('AcmpUser') -and $ask) {
+  Write-Info "Lokaler ACMP-Benutzer der Person (in der ACMP-Konsole angelegt). Dann prueft ACMP ihre echten Rechte."
+  $AcmpUser = Read-Value "ACMP-Benutzername (optional)" "" '^([A-Za-z0-9_.-]{2,32})?$' "Nur Buchstaben, Zahlen und . _ -"
+}
+$isApprover = [bool]$Approver
+if (-not $PSBoundParameters.ContainsKey('Approver') -and $ask) {
+  Write-Info "Freigeber duerfen Schreib-/Ausfuehrbefehle anderer auf der Freigabe-Seite zustimmen."
+  $isApprover = Read-YesNo "Soll '$Name' auch Freigeber sein?" $true
+}
+if ($isApprover -and -not $Email) {
+  if (-not $ask) { throw "-Email fehlt (Pflicht fuer Freigeber)." }
+  $Email = Read-Value "E-Mail fuer Freigabe-Benachrichtigungen" "" '^[^@\s]+@[^@\s]+$' "Bitte eine gueltige E-Mail-Adresse."
+}
+
+Write-Step 2 3 "Anlegen und aktivieren"
+$created = Add-McpUser $cfgPath $Name $AcmpUser $isApprover $Email
+Write-Ok "Bediener '$Name' angelegt"
+$r = Restart-AcmpMcp $base
+if ($r.State -ne "ok") { Write-Bad "Neustart: $($r.Message)"; exit 2 }
+Write-Ok "Dienst neu gestartet - neuer Key ist aktiv"
+$cfg = Read-AcmpConfig $cfgPath
+try {
+  $t = Invoke-McpCall (Get-LocalMcpUrl $cfg) $created.ApiKey "tools/list" @{}
+  Write-Ok ("Test mit dem neuen Key: {0} Tools verfuegbar" -f $t.result.tools.Count)
+} catch { Write-Hint "Test-Aufruf fehlgeschlagen: $($_.Exception.Message)" }
+
+Write-Step 3 3 "Weitergeben"
+$publicUrl = Get-PublicUrl $cfg
+Show-AccessSummary $created $publicUrl ("$($cfg.mcp.bindAddress)" -in @("", "127.0.0.1", "localhost"))
+Write-Hint "Key und Freigabe-Link sicher weitergeben (z.B. 1Password-Freigabe), nicht per unverschluesselter Mail/Chat."
+if ($AcmpUser) {
+  Write-Host ""
+  Write-Info "ACMP-Identitaet verknuepfen - muss die Person selbst tun (braucht ihr ACMP-Passwort), auf diesem Server als Admin:"
+  Write-Host "  cd $base" -ForegroundColor White
+  Write-Host "  .\acmp-token-setup.exe $AcmpUser" -ForegroundColor White
+  Write-Info "danach Dienst neu starten:  Stop-ScheduledTask $script:TaskName; Start-ScheduledTask $script:TaskName"
+}
+if ($ask) {
+  Write-Host ""
+  $ch = Read-Choice "Welchen KI-Client nutzt '$Name'?" $script:ClientNames 1
+  Show-ClientConfig $ch $publicUrl $created.ApiKey
+}
