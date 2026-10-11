@@ -78,6 +78,20 @@ Fertige Konfigurationen für Claude Code, Claude Desktop, Codex CLI, VS Code/Git
 - **Pro-User:** Jeder Bediener hat einen eigenen API-Key und optional eine eigene ACMP-Identität. ACMP prüft dann dessen echte Rechte (`GetOwnUserRights`).
 - **Vier-Augen-Freigabe:** Schreib-, Ausführ- und Löschaufrufe laufen nicht sofort, sondern werden als Antrag eingefroren. Erst wenn 1 Person (Write) bzw. 2 verschiedene Personen (Destructive) auf der Weboberfläche zustimmen, startet der eigentliche ACMP-Aufruf. Die Zustimmung läuft also außerhalb des LLM.
 
+## So sieht die Freigabe aus
+
+Fordert die KI einen Schreib-, Ausführ- oder Löschbefehl an, landet er als Antrag auf der Freigabe-Seite. Es wird nichts ausgeführt, bis genug **verschiedene** Personen zugestimmt haben. Die Bilder zeigen eine Demo-Instanz mit erfundenen Daten.
+
+![Liste der offenen Freigaben mit Risikostufe und Zustimmungen](docs/img/freigaben-liste.png)
+
+Die Detailansicht zeigt die angegebene Absicht, Antragsteller und Zielrechner sowie das Skript **im Klartext**, genau so, wie es auf dem Client läuft:
+
+![Detailansicht einer PowerShell-Freigabe mit Absicht, Eckdaten und entschlüsseltem Skript](docs/img/freigabe-detail.png)
+
+Darunter stehen der Roh-Befehl an ACMP, eine Schritt-für-Schritt-Erklärung mit Warnhinweisen und die Buttons für die Zustimmung:
+
+![Roh-Befehl, Schritt-für-Schritt-Erklärung und Freigeben/Ablehnen](docs/img/freigabe-zustimmen.png)
+
 ## Tools (Auswahl)
 
 Der Katalog wächst. Die aktuelle Liste liefert `tools/list`, alle 167 nativen ACMP-Kommandos zeigt `acmp_list_commands`.
