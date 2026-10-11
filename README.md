@@ -34,7 +34,7 @@ Der Assistent führt in 9 Schritten durch alles. Bei jedem Schritt erklärt er, 
 
 1. **Prüft die Voraussetzungen** (AESB SICS, Port 3950, .NET, freier Port). Bei einem Fehler sagt er, was zu tun ist.
 2. **Fragt nach der Public API** in der ACMP-Konsole und zeigt den Klickpfad.
-3. **Installiert und baut** nach `C:\ProgramData\AcmpMcp`. Der Ordner ist nur für Administratoren und SYSTEM zugänglich.
+3. **Installiert und baut** nach `C:\ProgramData\AcmpMcp`. Config, Secrets und Logs sind nur für Administratoren und SYSTEM lesbar.
 4. **Fragt den SICS-Benutzer ab.** Das Passwort wird verdeckt eingegeben.
 5. **Richtet den Dienst ein und prüft die Anmeldung an ACMP.** Klappt sie nicht, fragt er die Zugangsdaten erneut ab.
 6. **Legt dich als ersten Administrator und Freigeber an.**
