@@ -1,0 +1,46 @@
+[
+  {
+    "name": "acmp_get_licenses",
+    "command": "GetLicenses",
+    "version": 1,
+    "tier": "Read",
+    "description": "Listet alle Lizenzen (Software-Lizenzen/Lizenzbestand).",
+    "args": []
+  },
+  {
+    "name": "acmp_get_master_data_settings",
+    "command": "GetMasterDataSettings",
+    "version": 1,
+    "tier": "Read",
+    "description": "Stammdaten-Einstellungen: Custom-Field-Definitionen, Vertrags-/Dokumenttypen, MaxDocumentSize, DataVersion.",
+    "args": []
+  },
+  {
+    "name": "acmp_get_app_settings",
+    "command": "GetAcmpAppSettings",
+    "version": 1,
+    "tier": "Read",
+    "description": "ACMP-App-Einstellungen: Waehrung, Asset-Zustaende (Id/Caption), Auto-Inventarnummer.",
+    "args": []
+  },
+  {
+    "name": "acmp_get_custom_field_list",
+    "command": "GetCustomFieldList",
+    "version": 2,
+    "tier": "Read",
+    "description": "Definitionen aller Custom Fields (Bezeichnungen EN/DE, Eingabemethode, Wertelisten).",
+    "args": []
+  },
+  {
+    "name": "acmp_get_client_id",
+    "command": "GetClientId",
+    "version": 1,
+    "tier": "Read",
+    "description": "Loest eine ACMP-ClientId anhand von ComputerName, MacAddress oder MachineId auf.",
+    "args": [
+      { "name": "computerName", "xml": "ComputerName", "kind": "string", "required": false, "description": "Computername des Clients." },
+      { "name": "macAddress", "xml": "MacAddress", "kind": "string", "required": false, "description": "MAC-Adresse." },
+      { "name": "machineId", "xml": "MachineId", "kind": "string", "required": false, "description": "Machine-Id." }
+    ]
+  }
+]

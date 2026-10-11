@@ -1,0 +1,19 @@
+# Zugangsdaten / lokale Konfiguration - NIEMALS committen
+config.local.json
+config.local.json.*
+secrets.local.json
+*.secret.json
+*.pw
+
+# Build
+out/
+*.exe
+*.pdb
+
+# Laufzeitdaten einer Installation
+*.log
+pending/
+changelog.json
+last-approval-id.txt
+*.bak
+*.crt

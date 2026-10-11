@@ -1,0 +1,65 @@
+{
+  "_hinweis": "Vorlage fuer config.local.json. Kopieren nach config.local.json und die HIER_...-Platzhalter ausfuellen. config.local.json bleibt lokal (siehe .gitignore) und wird NIE committet.",
+
+  "sics": {
+    "_hinweis": "Zugangsdaten eines SICS-/AESB-Benutzers auf eurem ACMP-Server (Menue: AESB SICS Console). Dient nur als Basis-/Discovery-Verbindung - echte Bediener bekommen ueber die Ersteinrichtung (/setup) bzw. Onboarding (/onboarding) eigene ACMP-Identitaeten.",
+    "host": "127.0.0.1",
+    "wssPort": 3950,
+    "virtualRouter": "VCMN",
+    "username": "HIER_SICS_USERNAME",
+    "password": "HIER_SICS_PASSWORT",
+    "verifyServerCertificate": false
+  },
+
+  "helpdesk": {
+    "_hinweis": "Optional. GUID des Ticketstatus 'Erstellt', den acmp_create_ticket fuer neue Tickets setzt. Der Default stammt aus einer ACMP-6.9-Installation. Schlaegt das Anlegen von Tickets fehl, hier die GUID eures Status 'Erstellt' eintragen.",
+    "createdStateId": "{0E9A3C65-5EA3-42BE-80E9-B71A2C4F01C2}"
+  },
+
+  "mcp": {
+    "_hinweis": "httpPort/bindAddress bestimmen, wo der Server lauscht. 127.0.0.1 = nur lokal erreichbar (sicherer Default fuer die Ersteinrichtung). Fuer LAN-Zugriff auf die tatsaechliche LAN-IP des ACMP-Servers umstellen - dann braucht ihr mindestens einen Bediener unter 'users' (per /setup anlegen, siehe README).",
+    "httpPort": 8765,
+    "bindAddress": "127.0.0.1",
+    "users": [],
+    "logFile": "server.log"
+  },
+
+  "db": {
+    "_hinweis": "Optional. Nur noetig fuer die read-only DB-Report-Tools (Schwachstellen, Inventar, Lizenzen ...). Ohne diesen Abschnitt laufen alle anderen Tools normal, nur die DB-Report-Tools bleiben aus. Setup siehe grant-db-readonly.sql.",
+    "connectionString": "Server=HIER_SQL_INSTANZ;Database=ACMP;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=10"
+  },
+
+  "runPowershell": {
+    "_hinweis": "Optional. Verweist auf eine Client-Command-Vorlage mit einer Skript-Variable, damit acmp_run_powershell verfuegbar wird. Ohne diesen Abschnitt bleibt das Tool aus. clientCommandId aus eurer ACMP-Konsole (Client Commands).",
+    "clientCommandId": "HIER_CLIENT_COMMAND_GUID",
+    "variableName": "SCRIPT"
+  },
+
+  "approval": {
+    "_hinweis": "Vier-Augen-Freigabe fuer Schreib-/Ausfuehr-/Loeschkommandos. Mit leerem 'approvers' startet der Server im Ersteinrichtungs-Modus: beim Start wird ein einmaliger Setup-Link ins Log geschrieben (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator/Freigeber ohne manuelles JSON-Editieren per Weboberflaeche (/setup) anlegen koennt. Weitere Bediener danach ueber /onboarding.",
+    "enabled": true,
+    "publicUrl": "http://127.0.0.1:8765",
+    "pendingDir": "pending",
+    "auditFile": "approval-audit.log",
+    "requester": "",
+    "noApprovalTools": [],
+    "writeApprovers": 1,
+    "destructiveApprovers": 2,
+    "expiryMinutes": 120,
+    "blockDangerous": false,
+    "blockPatterns": [],
+    "approvers": [],
+    "notify": {
+      "_hinweis": "Optional. E-Mail-Benachrichtigung an Freigeber bei neuen Freigabe-Anfragen, ueber einen SMTP-Relay eures Vertrauens (keine Cloud-Abhaengigkeit). Ohne gueltigen smtpHost bleibt Benachrichtigung einfach aus, alles andere funktioniert weiter.",
+      "enabled": false,
+      "smtpHost": "HIER_SMTP_RELAY",
+      "smtpPort": 25,
+      "useSsl": false,
+      "username": null,
+      "password": null,
+      "from": "acmp-mcp@example.org"
+    },
+    "bypassAll": false,
+    "toolApprovalCounts": {}
+  }
+}

@@ -1,0 +1,344 @@
+[
+    {
+        "name":  "acmp_client_info",
+        "description":  "Steckbrief je Client: Computername, Domaene, Primaer-/Anzeige-IP, MAC-Adresse, Verwaltungs- und Ausmusterungs-Status, installierte ACMP-Agent-Version, Beschreibung sowie optional die E-Mail des letzten Benutzers (aus CLT_LastUserInfo). Erwartet eine ClientId-GUID; der Host loest Computername-\u003eGUID auf.",
+        "sql":  "SELECT TOP (1) c.COMPUTERNAME AS Computername, c.COMPUTERDOMAIN AS Domaene, c.PRIMARYIP AS PrimaryIP, c.DISPLAYIP AS AnzeigeIP, c.MACADDRESS AS MACAdresse, c.ISMANAGED AS IstVerwaltet, c.IsRetired AS IstAusgemustert, c.InstalledACMPVersion AS ACMPVersion, c.COMPUTERDESCRIPTION AS Beschreibung, lu.EMail AS LetzterBenutzerEmail FROM CLT_CLIENTS_TABLE c LEFT JOIN CLT_LastUserInfo lu ON lu.ClientId = c.CLIENTID WHERE c.CLIENTID = @client",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "ClientId als uniqueidentifier (GUID). Host loest Computername-\u003eClientId auf und uebergibt die GUID. Vergleich gegen CLT_CLIENTS_TABLE.CLIENTID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_offline_clients",
+        "description":  "Clients ohne Server-Kontakt seit mindestens @days Tagen (inkl. Clients, die noch nie verbunden waren = kein LastConnection-Eintrag). Liefert Computername, Domaene, IP, ACMP-Version, letzten Kontaktzeitpunkt und Tage offline. Ausgemusterte Clients (IsRetired=1) werden ausgeschlossen. Sortiert: nie verbunden zuerst, dann aelteste zuerst.",
+        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS Computername, c.COMPUTERDOMAIN AS Domaene, c.PRIMARYIP AS PrimaryIP, c.InstalledACMPVersion AS ACMPVersion, lc.TimeStamp AS LetzterKontakt, DATEDIFF(DAY, lc.TimeStamp, GETDATE()) AS TageOffline FROM CLT_CLIENTS_TABLE c LEFT JOIN CLT_Clients_LastConnection lc ON lc.ClientId = c.CLIENTID WHERE c.IsRetired = 0 AND (lc.TimeStamp IS NULL OR lc.TimeStamp \u003c DATEADD(DAY, -@days, GETDATE())) ORDER BY CASE WHEN lc.TimeStamp IS NULL THEN 0 ELSE 1 END, lc.TimeStamp ASC",
+        "args":  [
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Schwellwert in Tagen. Clients gelten als offline, wenn ihr letzter Kontakt aelter als @days Tage ist (oder nie). Default-Empfehlung 30.",
+                         "default":  "30"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_agent_versions",
+        "description":  "Agent-Versions-Verteilung der Flotte: GROUP BY InstalledACMPVersion mit Anzahl der Clients je Version, absteigend sortiert. Hilft, Versions-Drift und veraltete Agenten zu erkennen. Ausgemusterte Clients ausgeschlossen.",
+        "sql":  "SELECT TOP (500) COALESCE(InstalledACMPVersion, \u0027(unbekannt)\u0027) AS ACMPVersion, COUNT(*) AS AnzahlClients FROM CLT_CLIENTS_TABLE WHERE IsRetired = 0 GROUP BY InstalledACMPVersion ORDER BY COUNT(*) DESC",
+        "args":  [
+
+                 ]
+    },
+    {
+        "name":  "acmp_hardware_profile",
+        "description":  "Hardware- und OS-Steckbrief je Client: CPU (Name/Hersteller/Kerne/Takt), RAM (GB gesamt + belegte/freie Slots), System (Hersteller/Modell/Seriennr aus CLT_HDW_Machine), Mainboard (Hersteller/Modell/Seriennr), BIOS (Hersteller/Version/Datum) und Betriebssystem (Name/Release/Build/Seriennr). Ein Client pro Aufruf (Pflichtparameter @client). LEFT JOINs, damit auch bei fehlenden Einzel-Inventaren eine Zeile zurueckkommt.",
+        "sql":  "SELECT TOP 500 c.COMPUTERNAME AS [Computer], cpu.PROCESSORNAME AS [CPU], cpu.VENDOR AS [CPU-Hersteller], cpu.CPUCOUNT AS [CPU-Anzahl], cpu.MAXFREQUENCY AS [Max-MHz], CAST(mem.PHYSICALTOTAL/1048576.0 AS decimal(10,1)) AS [RAM-GB], mem.SLOTUSED AS [RAM-Slots-belegt], mem.SLOTCOUNT AS [RAM-Slots-gesamt], mch.SystemManufacturer AS [System-Hersteller], mch.SystemModel AS [System-Modell], mch.SystemSerial AS [System-Seriennr], mb.MainBoardManufacturer AS [Mainboard-Hersteller], mb.MainBoardModel AS [Mainboard-Modell], mb.MainBoardSerial AS [Mainboard-Seriennr], bios.BIOSVendor AS [BIOS-Hersteller], bios.BIOSVersion AS [BIOS-Version], bios.Date AS [BIOS-Datum], os.OSSTRING AS [Betriebssystem], os.DisplayVersion AS [OS-Release], os.BuildNo AS [OS-Build], os.SerialNumber AS [OS-Seriennr] FROM CLT_CLIENTS_TABLE c LEFT JOIN CLT_HDW_CPU cpu ON cpu.CLIENTID=c.CLIENTID LEFT JOIN CLT_HDW_MEMORY mem ON mem.CLIENTID=c.CLIENTID LEFT JOIN CLT_HDW_Machine mch ON mch.CLIENTID=c.CLIENTID LEFT JOIN CLT_HDW_Mainboard mb ON mb.CLIENTID=c.CLIENTID LEFT JOIN CLT_HDW_BIOS bios ON bios.CLIENTID=c.CLIENTID LEFT JOIN CLT_OPERATINGSYSTEM os ON os.CLIENTID=c.CLIENTID WHERE c.CLIENTID=@client",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "ClientId als uniqueidentifier-GUID (Host loest Computername-\u003eClientId auf). Vergleich gegen CLT_CLIENTS_TABLE.CLIENTID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_low_disk_space",
+        "description":  "Lokale Festplatten mit wenig freiem Speicher (Schwelle @minFreeGB). Listet je betroffenes Laufwerk Computer, Laufwerksbuchstabe, Bezeichnung, Dateisystem, Groesse-GB, Frei-GB und Frei-Prozent. Optional auf einen Client einschraenkbar (@client). Filtert auf MediaType=\u0027Local Disk\u0027, um Netzlaufwerke/CD/Wechseldatentraeger auszuschliessen. Sortiert nach wenigstem freien Platz zuerst.",
+        "sql":  "SELECT TOP 500 c.COMPUTERNAME AS [Computer], ld.DRIVENAME AS [Laufwerk], ld.DRIVELABEL AS [Bezeichnung], ld.FILESYSTEM AS [Dateisystem], CAST(ld.CAPACITY/1048576.0 AS decimal(10,1)) AS [Groesse-GB], CAST(ld.FREESPACE/1048576.0 AS decimal(10,1)) AS [Frei-GB], CASE WHEN ld.CAPACITY\u003e0 THEN CAST(100.0*ld.FREESPACE/ld.CAPACITY AS decimal(5,1)) ELSE NULL END AS [Frei-Prozent] FROM CLT_HDW_LDRIVES ld JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID=ld.CLIENTID WHERE ld.MediaType=\u0027Local Disk\u0027 AND ld.CAPACITY\u003e0 AND ld.FREESPACE \u003c (CAST(@minFreeGB AS bigint)*1048576) AND (@client IS NULL OR ld.CLIENTID=@client) ORDER BY [Frei-GB] ASC",
+        "args":  [
+                     {
+                         "name":  "minFreeGB",
+                         "required":  true,
+                         "kind":  "int",
+                         "description":  "Schwelle in GB: liefert nur Laufwerke mit weniger als so viel freiem Speicher (z.B. 50)."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optionale ClientId-GUID. Wenn NULL/nicht gesetzt -\u003e flottenweit ueber alle Clients; sonst nur dieser Client. Vergleich gegen CLT_HDW_LDRIVES.CLIENTID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_software_inventory",
+        "description":  "Komplette installierte Software je Client, konsolidiert aus CLT_SW_SETUP+SYS_SW_SETUP und CLT_SW_MSI+SYS_SW_MSI. Liefert Quelle (Setup/MSI), Name, Version und Hersteller. Optionaler Teilstring-Filter @name auf den Software-Namen (wirkt auf beide Quellen). Hinweis: Software kann sowohl als Setup- als auch als MSI-Eintrag erscheinen (Quelle in Spalte \u0027Source\u0027 kenntlich gemacht); fuer eine deduplizierte Liste kann der Aufrufer nach Name+Version gruppieren.",
+        "sql":  "SELECT TOP (500) sw.Source, sw.Name, sw.Version, sw.Publisher FROM (SELECT \u0027Setup\u0027 AS Source, s.NAME AS Name, s.VERSION AS Version, s.PUBLISHER AS Publisher FROM CLT_SW_SETUP c JOIN SYS_SW_SETUP s ON s.SWSETUPID = c.SWSETUPID WHERE c.CLIENTID = @client AND (@name IS NULL OR s.NAME LIKE \u0027%\u0027 + @name + \u0027%\u0027) UNION ALL SELECT \u0027MSI\u0027 AS Source, m.NAME AS Name, m.VERSIONSTRING AS Version, m.PUBLISHER AS Publisher FROM CLT_SW_MSI cm JOIN SYS_SW_MSI m ON m.SWMSIID = cm.SWMSIID WHERE cm.CLIENTID = @client AND (@name IS NULL OR m.NAME LIKE \u0027%\u0027 + @name + \u0027%\u0027)) sw ORDER BY sw.Name, sw.Source",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "ClientId (uniqueidentifier-GUID). Der Host loest Computername-\u003eClientId auf und uebergibt die GUID. Vergleich gegen CLT_SW_SETUP.CLIENTID bzw. CLT_SW_MSI.CLIENTID."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring fuer den Software-Namen. NULL = keine Einschraenkung. Wird intern als NAME LIKE \u0027%\u0027+@name+\u0027%\u0027 auf SYS_SW_SETUP.NAME und SYS_SW_MSI.NAME angewandt."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_failed_updates",
+        "description":  "Fehlgeschlagene Windows-Update-/Treiber-Installationen (WUM) je Client oder flottenweit. Liest CLT_Wum_FailedUpdates, reichert mit menschenlesbarem Update-Namen (SYS_Wum_Updates_Localization) sowie KB-Nummer und Severity (Sys_Wum_Updates, neueste Revision) an. Read-only. Spalten: ComputerName, UpdateName, KB, Severity (Critical/Important/Moderate/Low/Unspecified), FailedOn, UpdateId. Ohne @client -\u003e flottenweit; @name filtert nach Update-Name (Teilstring); @days begrenzt auf Fehler der letzten N Tage.",
+        "sql":  "SELECT TOP 500 c.COMPUTERNAME AS ComputerName, loc.Name AS UpdateName, CASE WHEN u.KBId IS NULL OR u.KBId=0 THEN NULL ELSE \u0027KB\u0027+CAST(u.KBId AS varchar(20)) END AS KB, CASE u.Severity WHEN 4 THEN \u0027Critical\u0027 WHEN 3 THEN \u0027Important\u0027 WHEN 2 THEN \u0027Moderate\u0027 WHEN 1 THEN \u0027Low\u0027 ELSE \u0027Unspecified\u0027 END AS Severity, f.ReportDate AS FailedOn, f.UpdateId AS UpdateId FROM CLT_Wum_FailedUpdates f INNER JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = f.ClientId LEFT JOIN SYS_Wum_Updates_Localization loc ON loc.Id = f.UpdateId OUTER APPLY (SELECT TOP 1 su.KBId, su.Severity FROM Sys_Wum_Updates su WHERE su.Id = f.UpdateId ORDER BY su.RevisionNumber DESC) u WHERE (@client IS NULL OR f.ClientId = @client) AND (@name IS NULL OR loc.Name LIKE \u0027%\u0027+@name+\u0027%\u0027) AND (@days IS NULL OR f.ReportDate \u003e= DATEADD(DAY, -1 * @days, GETDATE())) ORDER BY f.ReportDate DESC",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "ClientId-GUID (Host loest Computername-\u003eClientId auf). NULL/weglassen = flottenweit ueber alle Clients."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Teilstring-Filter auf den Update-Namen (Host darf bereits mit % uebergeben; Query baut sonst LIKE \u0027%\u0027+@name+\u0027%\u0027). NULL = kein Namensfilter."
+                     },
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Nur Fehlschlaege der letzten N Tage (ReportDate \u003e= heute - N). NULL = keine Zeitbegrenzung."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_job_results",
+        "description":  "Job-/Command-Ergebnisse je Client: zeigt pro Client alle Jobauslaeufe aus SYS_Jobs_Logs_Items (mit Jobname/Ausloeser aus SYS_Jobs_Logs) inkl. menschenlesbarem Ausfuehrungs-Status und Ergebnis sowie der letzten Statusmeldung. Optional auf Jobs mit Namensteil @name filterbar. Ideal fuer \u0027Wie ist Job X auf Client Y gelaufen?\u0027 und \u0027Welche Jobs sind fehlgeschlagen?\u0027.",
+        "sql":  "SELECT TOP (500) l.JobName AS JobName, i.ComputerName AS Computer, CASE i.State WHEN 0 THEN \u0027Wartend\u0027 WHEN 1 THEN \u0027Zugewiesen\u0027 WHEN 2 THEN \u0027Laeuft\u0027 WHEN 3 THEN \u0027Abgeschlossen\u0027 WHEN 4 THEN \u0027Abgebrochen\u0027 WHEN 5 THEN \u0027Timeout/Fehler\u0027 ELSE \u0027Status \u0027+CAST(i.State AS varchar(10)) END AS Status, CASE i.Result WHEN 0 THEN \u0027Offen\u0027 WHEN 1 THEN \u0027Erfolg\u0027 WHEN 2 THEN \u0027Warnung/Fehlgeschlagen\u0027 WHEN 3 THEN \u0027Fehler\u0027 ELSE \u0027Ergebnis \u0027+CAST(i.Result AS varchar(10)) END AS Ergebnis, i.StateMsg AS Meldung, l.CreatorName AS Ausgeloest_von, CONVERT(varchar(19), DATEADD(day, -2, CAST(i.LastActivity AS datetime)), 120) AS Letzte_Aktivitaet, l.TestRing AS TestRing FROM SYS_Jobs_Logs_Items i JOIN SYS_Jobs_Logs l ON l.JobId = i.JobId WHERE i.ClientId = @client AND (@name IS NULL OR l.JobName LIKE \u0027%\u0027+@name+\u0027%\u0027) ORDER BY i.LastActivity DESC",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "Computername; der Host loest ihn zur ClientId-GUID auf und uebergibt eine uniqueidentifier-GUID (verglichen gegen SYS_Jobs_Logs_Items.ClientId)."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring des Jobnamens (LIKE %name%); NULL = alle Jobs des Clients."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_script_history",
+        "description":  "Skript-/Client-Command-Ausfuehrungs-Historie aus CLT_SCRIPT_EXECRESULT, angereichert mit dem lesbaren Skriptnamen (SYS_SCRIPTS.DESCRIPTION, Fallback DESCRIPTION der Ausfuehrung). Filterbar nach Client (@client), Skriptname (@name) und Zeitraum der letzten @days Tage. Zeigt Ergebnis (Erfolg/Fehlercode), Version, Ausfuehrungszeitpunkt und ob direkt oder via Job ausgeloest. Ideal fuer \u0027Was lief auf Client X?\u0027, \u0027Wie oft ist Skript Y fehlgeschlagen?\u0027.",
+        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS Computer, COALESCE(s.DESCRIPTION, e.DESCRIPTION) AS Skript, e.ScriptVersion AS Version, CASE e.EXECRESULT WHEN 0 THEN \u0027Erfolg\u0027 ELSE \u0027Fehler (\u0027+CAST(e.EXECRESULT AS varchar(10))+\u0027)\u0027 END AS Ergebnis, e.EXECRESULT AS ErgebnisCode, CONVERT(varchar(19), DATEADD(day, -2, CAST(e.RUNDATE AS datetime)), 120) AS Ausgefuehrt_am, CASE WHEN e.JobExecId IS NOT NULL THEN \u0027Job\u0027 ELSE \u0027Direkt\u0027 END AS Quelle FROM CLT_SCRIPT_EXECRESULT e JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = e.CLIENTID LEFT JOIN SYS_SCRIPTS s ON s.SCRIPTID = e.SCRIPTID AND s.ScriptVersion = e.ScriptVersion WHERE (@client IS NULL OR e.CLIENTID = @client) AND (@name IS NULL OR COALESCE(s.DESCRIPTION, e.DESCRIPTION) LIKE \u0027%\u0027+@name+\u0027%\u0027) AND (@days IS NULL OR e.RUNDATE \u003e= CAST(DATEADD(day, -@days, GETDATE()) AS float) + 2) ORDER BY e.RUNDATE DESC",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Computername; Host loest zu ClientId-GUID auf (verglichen gegen CLT_SCRIPT_EXECRESULT.CLIENTID). NULL = alle Clients."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring des Skriptnamens (LIKE %name% auf SYS_SCRIPTS.DESCRIPTION bzw. Ausfuehrungs-DESCRIPTION); NULL = alle Skripte."
+                     },
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Optionaler Zeitraum: nur Ausfuehrungen der letzten N Tage (gegen RUNDATE, float OLE-Datum). NULL = ohne Zeitgrenze."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_container_members",
+        "description":  "Listet die Clients (Computer) eines Containers auf. Sucht Container per Teilstring im Container-Namen (CLT_CONTAINER_STRUCTURE.Name), folgt CLT_CONTAINER_ITEMS.LinkID auf CLT_CLIENTS_TABLE.CLIENTID und zeigt je Mitglied Computername, Domaene, IP sowie ob die Mitgliedschaft statisch oder dynamisch (IsDynamic) ist. Read-only.",
+        "sql":  "SELECT TOP 500 s.Name AS Container, s.Path AS ContainerPfad, c.COMPUTERNAME AS Computername, c.COMPUTERDOMAIN AS Domaene, c.PRIMARYIP AS IPAdresse, CASE WHEN i.IsDynamic=1 THEN \u0027dynamisch\u0027 ELSE \u0027statisch\u0027 END AS Mitgliedsart, c.ISMANAGED AS Verwaltet, c.IsRetired AS Ausgemustert FROM CLT_CONTAINER_ITEMS i JOIN CLT_CONTAINER_STRUCTURE s ON s.ContainerID = i.CONTAINERID JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = i.LinkID WHERE s.Name LIKE \u0027%\u0027+@name+\u0027%\u0027 ORDER BY s.Name, c.COMPUTERNAME",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Teilstring des Container-Namens. Der Host kann den reinen Suchbegriff uebergeben (das SQL baut LIKE \u0027%\u0027+@name+\u0027%\u0027) oder bereits mit %-Wildcards. Beispiel: \u0027Oldenburg\u0027."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_client_containers",
+        "description":  "Zeigt alle Container, in denen ein bestimmter Client Mitglied ist. Filtert CLT_CONTAINER_ITEMS.LinkID = @client (ClientId-GUID) und joint auf CLT_CONTAINER_STRUCTURE fuer Name, Pfad, Typ und Beschreibung; gibt pro Container an, ob die Mitgliedschaft statisch oder dynamisch (IsDynamic) ist. Read-only.",
+        "sql":  "SELECT TOP 500 s.Name AS Container, s.Path AS ContainerPfad, CASE WHEN i.IsDynamic=1 THEN \u0027dynamisch\u0027 ELSE \u0027statisch\u0027 END AS Mitgliedsart, s.ContainerType AS ContainerTyp, s.Description AS Beschreibung FROM CLT_CONTAINER_ITEMS i JOIN CLT_CONTAINER_STRUCTURE s ON s.ContainerID = i.CONTAINERID WHERE i.LinkID = @client ORDER BY s.Path",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "ClientId als uniqueidentifier (GUID). Der Host loest den Computernamen via CLT_CLIENTS_TABLE.COMPUTERNAME -\u003e CLIENTID auf und uebergibt die GUID. Vergleich gegen CLT_CONTAINER_ITEMS.LinkID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_vulnerabilities",
+        "description":  "Listet die je Client erkannten Schwachstellen (CVEs) aus dem OVAL-Scan, angereichert mit CVSS-Score, Severity, Titel und betroffenen Produkten. Sortiert nach CVSS-Score absteigend (gefaehrlichste zuerst). Read-only.",
+        "sql":  "SELECT TOP (500) o.CVEId AS CVE, vs.Score AS CvssScore, vs.Severity AS Severity, o.Title AS Title, o.ProductNames AS AffectedProducts, o.DefinitionId AS OvalDefinitionId FROM CLT_Sec_OvalDefinitions_Results r INNER JOIN SYS_Sec_OvalDefinitions o ON o.OID = r.OID LEFT JOIN SYS_Sec_VulnerabilityScoreDefinitions vs ON vs.CVEId = o.CVEId WHERE r.ClientId = @client AND (@minScore IS NULL OR vs.Score \u003e= @minScore) ORDER BY vs.Score DESC, o.CVEId",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "ClientId-GUID (uniqueidentifier). Host loest Computername-\u003eGUID auf. Pflicht: pro Client, sonst sehr breit (12k+ Treffer flottenweit)."
+                     },
+                     {
+                         "name":  "minScore",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Optionaler CVSS-Mindest-Score (0-10). Filtert auf Score \u003e= @minScore. NULL = kein Filter."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_defender_health",
+        "description":  "Microsoft-Defender-Gesundheitsstatus je Client: Echtzeitschutz (RTP), Antivirus/Antispyware aktiv, Tamper Protection, Signatur-Version und -Alter (Tage), letzte Scans. Sortiert nach Signaturalter absteigend (veraltetste zuerst). Read-only.",
+        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS ComputerName, d.RealTimeProtectionEnabled AS RealTimeProtection, d.AntivirusEnabled AS AntivirusEnabled, d.AntispywareEnabled AS AntispywareEnabled, d.BehaviorMonitorEnabled AS BehaviorMonitor, d.IsTamperProtected AS TamperProtection, d.AntivirusSignatureVersion AS AvSignatureVersion, d.AntivirusSignatureAge AS AvSignatureAgeDays, d.AntivirusSignatureLastUpdated AS AvSignatureLastUpdated, d.AntispywareSignatureAge AS AsSignatureAgeDays, d.AMProductVersion AS DefenderProductVersion, d.AMEngineVersion AS EngineVersion, d.FullScanEndTime AS LastFullScanEnd, d.QuickScanEndTime AS LastQuickScanEnd, d.IsVirtualMachine AS IsVirtualMachine FROM CLT_Sec_Defender_StatusInfo d INNER JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = d.ClientId WHERE (@client IS NULL OR d.ClientId = @client) AND (@name IS NULL OR c.COMPUTERNAME LIKE \u0027%\u0027 + @name + \u0027%\u0027) ORDER BY d.AntivirusSignatureAge DESC",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optionale ClientId-GUID (uniqueidentifier) fuer Einzel-Client. NULL = flottenweit alle Clients mit Defender-Statusdaten."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Computername-Teilstring (LIKE %name%). NULL = kein Namensfilter."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_bitlocker_status",
+        "description":  "BitLocker-VerschluesselungsSTATUS je Client und Laufwerk: Schutzstatus, Verschluesselungszustand (decoded), Prozent, Methode, Volume-Typ, TPM-Nutzung, Kapazitaet. NUR Status - liest NIEMALS Recovery-Keys (_RecoveryInfo/_AutoPasswords). Read-only.",
+        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS ComputerName, di.DriveLetter AS DriveLetter, di.IsProtected AS IsProtected, CASE di.VolumeState WHEN 0 THEN \u0027FullyDecrypted\u0027 WHEN 1 THEN \u0027FullyEncrypted\u0027 WHEN 2 THEN \u0027EncryptionInProgress\u0027 WHEN 3 THEN \u0027DecryptionInProgress\u0027 WHEN 4 THEN \u0027EncryptionPaused\u0027 WHEN 5 THEN \u0027DecryptionPaused\u0027 ELSE CONVERT(varchar(12), di.VolumeState) END AS EncryptionState, di.EncryptionPercentage AS EncryptionPercentage, CASE di.EncryptionMethod WHEN 0 THEN \u0027None\u0027 WHEN 3 THEN \u0027AES_128\u0027 WHEN 4 THEN \u0027AES_256\u0027 WHEN 6 THEN \u0027XTS_AES_128\u0027 WHEN 7 THEN \u0027XTS_AES_256\u0027 ELSE CONVERT(varchar(12), di.EncryptionMethod) END AS EncryptionMethod, CASE di.VolumeType WHEN 0 THEN \u0027OperatingSystem\u0027 WHEN 1 THEN \u0027FixedData\u0027 WHEN 2 THEN \u0027Removable\u0027 ELSE CONVERT(varchar(12), di.VolumeType) END AS VolumeType, di.IsLocked AS IsLocked, di.IsTPmUsed AS UsesTpm, di.IsTpmWithPinEnabled AS TpmWithPin, di.IsRecoveryPasswordEnabled AS RecoveryPasswordConfigured, CONVERT(decimal(18,1), di.CapacityKB/1048576.0) AS CapacityGB, st.IsManagedByAcmp AS ManagedByAcmp, st.LastChange AS StatusLastChange FROM CLT_Sec_BitLocker_DriveInventory di INNER JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = di.ClientId LEFT JOIN CLT_Sec_BitLocker_Status st ON st.ClientId = di.ClientId WHERE (@client IS NULL OR di.ClientId = @client) AND (@name IS NULL OR c.COMPUTERNAME LIKE \u0027%\u0027 + @name + \u0027%\u0027) ORDER BY c.COMPUTERNAME, di.DriveLetter",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optionale ClientId-GUID (uniqueidentifier) fuer Einzel-Client. NULL = flottenweit alle Laufwerke."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Computername-Teilstring (LIKE %name%). NULL = kein Namensfilter."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_contracts_expiring",
+        "description":  "Listet Vertraege aus SYS_MasterData_Contracts, deren ExpirationDate innerhalb der naechsten @days Tage liegt (noch nicht abgelaufen, nicht gekuendigt). Liefert Name, Vertragsnummer, Ablaufdatum, Tage bis Ablauf, Vertragstyp (deutsche Caption), Status, Kuendbarkeit/Auto-Verlaengerung. ExpirationDate ist float (OLE-Automation-Datum) und wird per CAST AS datetime umgerechnet. Optionaler Namensfilter @name.",
+        "sql":  "SELECT TOP 500 c.Id AS ContractId, c.Name AS Vertrag, c.ContractNumber AS Vertragsnummer, DATEADD(day, -2, CAST(c.ExpirationDate AS datetime)) AS Ablaufdatum, DATEDIFF(day, GETDATE(), DATEADD(day, -2, CAST(c.ExpirationDate AS datetime))) AS TageBisAblauf, t.Caption_de AS Vertragstyp, CASE c.State WHEN 0 THEN \u0027Entwurf\u0027 WHEN 1 THEN \u0027Aktiv\u0027 WHEN 2 THEN \u0027Beendet\u0027 ELSE CAST(c.State AS nvarchar(10)) END AS Status, c.IsTerminable AS Kuendbar, c.IsAutoExtended AS AutoVerlaengerung, c.IsTerminated AS Gekuendigt FROM SYS_MasterData_Contracts c LEFT JOIN SYS_MasterData_Contracts_Types t ON t.Id = c.ContractTypeId WHERE c.ExpirationDate IS NOT NULL AND c.IsTerminated = 0 AND DATEADD(day, -2, CAST(c.ExpirationDate AS datetime)) \u003e= GETDATE() AND DATEADD(day, -2, CAST(c.ExpirationDate AS datetime)) \u003c= DATEADD(day, @days, GETDATE()) AND (@name IS NULL OR c.Name LIKE \u0027%\u0027+@name+\u0027%\u0027) ORDER BY c.ExpirationDate ASC",
+        "args":  [
+                     {
+                         "name":  "days",
+                         "required":  true,
+                         "kind":  "int",
+                         "description":  "Zeitfenster in Tagen ab heute; Vertraege mit Ablauf innerhalb dieses Fensters werden zurueckgegeben (z.B. 30, 90)."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring-Filter auf den Vertragsnamen (Host kann NULL uebergeben = kein Filter; LIKE \u0027%name%\u0027 wird intern gebaut)."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_license_compliance",
+        "description":  "Lizenz-Ueber-/Unterdeckung je Produkt/Lizenz aus SYS_LicMan_Compliance_Licenses, angereichert mit Produkt- (SYS_LicMan_Products) und Lizenznamen (SYS_LicMan_Licenses). Zeigt gueltige Lizenzanzahl, effektive Nutzung, verfuegbare Lizenzen, Bilanz (Balance) und abgeleiteten Deckungsstatus (Unterdeckung bei Balance\u003c0, Ueberdeckung bei \u003e0). Optionaler Namensfilter @name und Schalter @onlyDeficit fuer nur Unterdeckungen.",
+        "sql":  "SELECT TOP 500 cl.Id AS ComplianceId, p.Name AS Produkt, l.Name AS Lizenz, cl.ValidLicenseCount AS GueltigeLizenzen, cl.EffectiveUsage AS EffektiveNutzung, cl.EffectiveAvailableLicenses AS VerfuegbareLizenzen, cl.Balance AS Bilanz, cl.Downgrades AS Downgrades, CASE WHEN cl.HasInfiniteValidLicenseCount = 1 THEN 1 ELSE 0 END AS UnbegrenzteLizenzen, CASE WHEN cl.Balance \u003c 0 THEN \u0027Unterdeckung\u0027 WHEN cl.Balance \u003e 0 THEN \u0027Ueberdeckung\u0027 ELSE \u0027Ausgeglichen\u0027 END AS Deckungsstatus, cl.State AS StatusCode FROM SYS_LicMan_Compliance_Licenses cl LEFT JOIN SYS_LicMan_Products p ON p.Id = cl.ProductId LEFT JOIN SYS_LicMan_Licenses l ON l.Id = cl.LicenseId WHERE (@name IS NULL OR p.Name LIKE \u0027%\u0027+@name+\u0027%\u0027 OR l.Name LIKE \u0027%\u0027+@name+\u0027%\u0027) AND (@onlyDeficit = 0 OR cl.Balance \u003c 0) ORDER BY cl.Balance ASC",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring-Filter auf Produkt- oder Lizenzname (Host kann NULL uebergeben = kein Filter; LIKE \u0027%name%\u0027 wird intern gebaut)."
+                     },
+                     {
+                         "name":  "onlyDeficit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Unterdeckungen (Balance \u003c 0) zurueckgeben; 0 = alle Compliance-Zeilen. Default 0.",
+                         "default":  "0"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_discover_tables",
+        "description":  "Listet alle Tabellen im ACMP-DB-Schema, deren Name den Suchbegriff enthaelt. Hilfreich zum Erkunden unbekannter Tabellen (z.B. \u0027ATTRIB\u0027 fuer Attribut-Tabellen, \u0027CUSTOM\u0027 fuer Custom Fields). Ergebnisse: Tabellenname + Spaltenanzahl.",
+        "sql":  "SELECT t.TABLE_NAME AS Tabellenname, COUNT(c.COLUMN_NAME) AS Spaltenanzahl FROM INFORMATION_SCHEMA.TABLES t LEFT JOIN INFORMATION_SCHEMA.COLUMNS c ON c.TABLE_NAME = t.TABLE_NAME WHERE t.TABLE_NAME LIKE \u0027%\u0027 + @pattern + \u0027%\u0027 GROUP BY t.TABLE_NAME ORDER BY t.TABLE_NAME",
+        "args":  [
+                     {
+                         "name":  "pattern",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Teilstring des Tabellennamens (z.B. \u0027ttrib\u0027 fuer Attribut-Tabellen, \u0027ustomfield\u0027 fuer Custom Fields, \u0027CLT_\u0027 fuer alle Client-Tabellen)."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_db_client_attributes",
+        "description":  "Benutzerdefinierte Felder (Custom Fields) eines Clients direkt aus der ACMP-DB. Bekannte Felder: TeamViewerID und TeamViewerAssign (Tabelle CF_VAL_C726C7A883D949388ED01A2C). Alle CF_VAL_*-Tabellen per acmp_discover_tables findbar.",
+        "sql":  "SELECT c.COMPUTERNAME AS Computername, v.CF_4982DC2075D548E887E5851FDD7E AS TeamViewerID, v.CF_A4F76CE612A3455B88E6455E2DA1 AS TeamViewerAssign FROM CLT_CLIENTS_TABLE c JOIN CF_VAL_C726C7A883D949388ED01A2C v ON v.CLIENTID = c.CLIENTID WHERE c.CLIENTID = @client",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "Computername (z.B. PC-0815) oder ClientId-GUID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_oval_scan_status",
+        "description":  "Letzter OVAL-/Vulnerability-Scan-Zeitpunkt je Client aus CLT_Sec_OvalDefinitions_Results_History.LastScanDateTime. Gibt exakten Scan-Timestamp, Tage seit letztem Scan und Anzahl aktiver/historischer Vulnerabilities. NULL bei LetzterOvalScan = Client hat keine Scan-Historie (nie gescannt oder alle Schwachstellen geschlossen). Optional: @client fuer Einzelabfrage, sonst flottenweite Uebersicht (nur Clients MIT History, neueste zuerst).",
+        "sql":  "SELECT TOP 500 c.COMPUTERNAME AS Computername, CONVERT(varchar(19), MAX(h.LastScanDateTime), 120) AS LetzterOvalScan, DATEDIFF(day, MAX(h.LastScanDateTime), GETDATE()) AS TageOhneOvalScan, (SELECT COUNT(*) FROM CLT_Sec_OvalDefinitions_Results r WHERE r.ClientId = c.CLIENTID) AS AktiveVulnerabilities, COUNT(DISTINCT h.OID) AS HistorieEintraege FROM CLT_CLIENTS_TABLE c JOIN CLT_Sec_OvalDefinitions_Results_History h ON h.ClientId = c.CLIENTID WHERE c.IsRetired = 0 AND (@client IS NULL OR c.CLIENTID = @client) GROUP BY c.CLIENTID, c.COMPUTERNAME ORDER BY MAX(h.LastScanDateTime) DESC",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername (z.B. PC-0815) oder ClientId-GUID fuer Einzelabfrage. Ohne Angabe: alle Clients mit Scan-Historie."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_teamviewer_ids",
+        "description":  "TeamViewer-IDs aller Clients aus dem ACMP Custom Field \u0027TeamViewerID\u0027. Liefert Computername + ID fuer alle Clients mit befuelltem Feld. Verbindungs-URL: teamviewer10://control?device={ID}. Optional: @client fuer Einzelabfrage.",
+        "sql":  "SELECT c.COMPUTERNAME AS Computername, v.CF_4982DC2075D548E887E5851FDD7E AS TeamViewerID FROM CLT_CLIENTS_TABLE c JOIN CF_VAL_C726C7A883D949388ED01A2C v ON v.CLIENTID = c.CLIENTID WHERE (@client IS NULL OR c.CLIENTID = @client) AND v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 ORDER BY c.COMPUTERNAME",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId-GUID fuer Einzelabfrage. Ohne Angabe: alle Clients mit TeamViewerID."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_teamviewer_connect",
+        "description":  "TeamViewer-Verbindung zu einem Client starten. Suche nach Computername, Windows-Benutzername, Nachname oder E-Mail (LIKE-Suche). Ergebnisse sind sortiert: Clients MIT TeamViewerID zuerst, dann nach Treffer-Art (Computername \u003e Benutzer \u003e E-Mail).\n\nAUSGABE-REGELN (immer einhalten):\n1. Genau 1 Treffer MIT TeamViewerID: Antworte mit Computername, Benutzer und dem Verbindungslink als klickbaren Markdown-Link: [TeamViewer starten](teamviewer10://control?device={ID})\n2. Mehrere Treffer MIT TeamViewerID: Liste alle auf, frage nach Bestaetigung welcher gemeint ist, dann Link ausgeben.\n3. Treffer gefunden aber TeamViewerID leer/NULL: Erklaere dass die ID noch nicht ausgelesen wurde. Empfehle: acmp_enqueue_client_command mit Command \u0027Teamviewer ID auslesen\u0027 auf dem betreffenden Client ausfuehren.\n4. Kein Treffer: Meldung \u0027Kein Client gefunden fuer: {query}\u0027. Alternativsuche vorschlagen.",
+        "sql":  "SELECT TOP 20 c.COMPUTERNAME AS Computername, os.LASTLOGGEDONUSER AS LetzterBenutzer, lu.EMail AS BenutzerEmail, CASE WHEN v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 THEN v.CF_4982DC2075D548E887E5851FDD7E ELSE NULL END AS TeamViewerID, CASE WHEN v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 THEN \u0027teamviewer10://control?device=\u0027 + v.CF_4982DC2075D548E887E5851FDD7E ELSE NULL END AS VerbindungsURL, CASE WHEN c.COMPUTERNAME LIKE \u0027%\u0027 + @query + \u0027%\u0027 THEN \u0027Computername\u0027 WHEN os.LASTLOGGEDONUSER LIKE \u0027%\u0027 + @query + \u0027%\u0027 THEN \u0027Benutzer\u0027 WHEN lu.EMail LIKE \u0027%\u0027 + @query + \u0027%\u0027 THEN \u0027E-Mail\u0027 ELSE \u0027Treffer\u0027 END AS GefundenAls FROM CLT_CLIENTS_TABLE c LEFT JOIN CLT_OPERATINGSYSTEM os ON os.CLIENTID = c.CLIENTID LEFT JOIN CLT_LastUserInfo lu ON lu.ClientId = c.CLIENTID LEFT JOIN CF_VAL_C726C7A883D949388ED01A2C v ON v.CLIENTID = c.CLIENTID WHERE c.IsRetired = 0 AND (c.COMPUTERNAME LIKE \u0027%\u0027 + @query + \u0027%\u0027 OR os.LASTLOGGEDONUSER LIKE \u0027%\u0027 + @query + \u0027%\u0027 OR lu.EMail LIKE \u0027%\u0027 + @query + \u0027%\u0027) ORDER BY CASE WHEN v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 THEN 0 ELSE 1 END, CASE WHEN c.COMPUTERNAME LIKE \u0027%\u0027 + @query + \u0027%\u0027 THEN 0 ELSE 1 END, c.COMPUTERNAME",
+        "args":  [
+                     {
+                         "name":  "query",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Freitext-Suche: Computername (z.B. PC-0815), Windows-Login (z.B. m.mustermann), Nachname (z.B. Mustermann) oder E-Mail (z.B. m.mustermann@example.com)."
+                     }
+                 ]
+    }
+]
