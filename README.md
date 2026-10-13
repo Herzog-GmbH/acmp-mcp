@@ -22,7 +22,7 @@ Ohne Agent geht es genauso, siehe nächster Abschnitt.
 
 ## Von Hand einrichten: der Assistent im Terminal
 
-**Voraussetzungen:** ACMP mit AESB/SICS (getestet mit ACMP 6.9), Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server.
+**Voraussetzungen:** ACMP mit AESB/SICS (getestet mit ACMP 6.9 und 6.10), Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server.
 
 Auf dem ACMP-Server eine PowerShell öffnen, ins Repo wechseln und starten. Fehlen Admin-Rechte, startet sich das Skript nach einer Windows-Abfrage (UAC) selbst neu:
 
@@ -92,18 +92,107 @@ Darunter stehen der Roh-Befehl an ACMP, eine Schritt-für-Schritt-Erklärung mit
 
 ![Roh-Befehl, Schritt-für-Schritt-Erklärung und Freigeben/Ablehnen](docs/img/freigabe-zustimmen.png)
 
-## Tools (Auswahl)
+## Was der Server kann
 
-Der Katalog wächst. Die aktuelle Liste liefert `tools/list`, alle 167 nativen ACMP-Kommandos zeigt `acmp_list_commands`.
+Der Server verbindet eine KI mit ACMP. Ihr fragt in normaler Sprache, zum Beispiel „Welche Rechner waren seit 30 Tagen offline?“, und die KI holt sich die Antwort über die Tools direkt aus ACMP. Lesen läuft sofort. Alles, was etwas verändert, ausführt oder löscht, wird nur als Antrag angelegt und läuft erst, wenn ein Mensch auf der Freigabe-Seite zustimmt, bei kritischen Aktionen zwei verschiedene Personen.
 
-| Kategorie | Beispiele | Freigabe |
+**Ein Beispiel im Ablauf:**
+
+1. Ihr schreibt: „Auf PC-0815 ist die Platte voll, räum den Windows-Temp-Ordner auf.“
+2. Die KI sucht den Rechner (`acmp_get_client_id`), prüft die Laufwerke (`acmp_low_disk_space`) und stellt einen PowerShell-Antrag (`acmp_run_powershell`).
+3. Auf der Freigabe-Seite sehen zwei Kollegen das Skript im Klartext und klicken „Freigeben“.
+4. Erst dann läuft das Skript auf dem Client, und die KI meldet das Ergebnis.
+
+## Alle Tools
+
+🟢 läuft sofort (nur lesen) · 🟡 Freigabe durch 1 Person · 🔴 Freigabe durch 2 verschiedene Personen
+
+Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/settings` anpassen. Ein *(DB)* hinter einem Tool heißt: Es braucht die optionale Datenbank-Anbindung (`db.connectionString`, nur lesend). Ein *(PS)* heißt: Es braucht die optionale Client-Command-Vorlage (`runPowershell.clientCommandId`). Die aktuelle Liste liefert `tools/list`.
+
+### System & Allgemein
+
+| | Tool | Zweck |
 |---|---|---|
-| Lesen | `acmp_get_clients`, `acmp_get_jobs`, `acmp_get_tickets`, `acmp_call` (generisch) | keine |
-| DB-Reports (optional) | `acmp_outdated_software`, `acmp_missing_updates`, `acmp_vulnerabilities`, `acmp_license_compliance` | keine (read-only) |
-| Ausführen | `acmp_enqueue_client_command`, `acmp_run_powershell` (optional) | Vier-Augen |
-| Stammdaten | `acmp_create_contact`/`_update_`, `_company`, `_location`, `_department`, `_asset` | Vier-Augen |
-| Container/Assets | `acmp_save_containers`, `acmp_delete_containers`, `acmp_lend_asset` | Vier-Augen (Löschen: 2 Personen) |
-| Helpdesk | `acmp_create_ticket`, `acmp_update_ticket`, `acmp_close_ticket` | einstellbar |
+| 🟢 | `acmp_server_info` | ACMP-Version und Serverdaten |
+| 🟢 | `acmp_whoami` | mit welchem ACMP-Benutzer und welchen Rechten man arbeitet |
+| 🟢 | `acmp_logout` | Verbindung neu aufbauen, z. B. nach einem Token-Wechsel |
+| 🟢 | `acmp_list_commands`, `acmp_describe` | alle 167 Public-API-Kommandos auflisten und mit Parametern erklären |
+| 🟡 | `acmp_call` | jedes API-Kommando ohne eigenes Tool. Lesende Kommandos laufen sofort, schreibende brauchen eine Freigabe |
+| 🟢 | `acmp_approval_status` | Stand eines Freigabe-Antrags |
+| 🟢 | `acmp_discover_tables` *(DB)* | Tabellen in der ACMP-Datenbank suchen („Was hat mit BitLocker zu tun?“) |
+
+### Clients & Inventar
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_get_clients`, `acmp_get_client_id`, `acmp_client_info` *(DB)* | Rechner auflisten, per Name oder MAC finden, Steckbrief mit IP, MAC und Agent-Version |
+| 🟢 | `acmp_get_os_info` | Betriebssystem und zuletzt angemeldeter Benutzer („Wer war zuletzt an PC-0815?“) |
+| 🟢 | `acmp_get_hardware`, `acmp_hardware_profile` *(DB)* | CPU, RAM, Platten, Dienste, Hersteller, Modell, Seriennummer |
+| 🟢 | `acmp_offline_clients` *(DB)* | Rechner ohne Kontakt seit X Tagen |
+| 🟢 | `acmp_agent_versions` *(DB)* | Verteilung der Agent-Versionen |
+| 🟢 | `acmp_low_disk_space` *(DB)* | Laufwerke mit wenig freiem Platz |
+| 🟢 | `acmp_read_registry`, `acmp_read_registry_result` *(beide PS)* | einen Registry-Wert vom Client lesen (festes Lese-Skript) |
+| 🟢 | `acmp_db_client_attributes` *(DB)* | benutzerdefinierte Felder eines Clients |
+
+### Software & Sicherheit
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_get_software`, `acmp_software_inventory` *(DB)*, `acmp_software_search` *(DB)* | installierte Software je Rechner und Suche („Wo ist 7-Zip drauf?“) |
+| 🟢 | `acmp_outdated_software` *(DB)* | veraltete Software |
+| 🟢 | `acmp_missing_updates`, `acmp_failed_updates` *(beide DB)* | fehlende und fehlgeschlagene Windows-Updates |
+| 🟢 | `acmp_vulnerabilities`, `acmp_oval_scan_status` *(beide DB)* | Schwachstellen (CVEs) mit Score und Zeitpunkt des letzten Scans |
+| 🟢 | `acmp_defender_health` *(DB)* | Defender-Status („Wo ist der Echtzeitschutz aus?“) |
+| 🟢 | `acmp_bitlocker_status` *(DB)* | BitLocker-Status je Laufwerk |
+| 🟢 | `acmp_get_licenses`, `acmp_license_compliance` *(DB)* | Lizenzen mit Über- und Unterdeckung |
+
+### Jobs & Ausführen
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_get_client_commands` | verfügbare Client Commands |
+| 🟢 | `acmp_get_jobs`, `acmp_job_results` *(DB)*, `acmp_script_history` *(DB)* | was auf einem Rechner gelaufen ist und mit welchem Ergebnis |
+| 🟡 | `acmp_enqueue_client_command` | einen vorhandenen Client Command starten |
+| 🔴 | `acmp_run_powershell` *(PS)* | beliebiges PowerShell als SYSTEM auf einem Client |
+
+### Container
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_container_members`, `acmp_client_containers` *(beide DB)* | Rechner in einem Container und Container eines Rechners |
+| 🟡 | `acmp_create_container`, `acmp_save_containers` | Container anlegen oder ändern |
+| 🔴 | `acmp_delete_containers` | Container löschen |
+
+### Assets & Stammdaten
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_get_asset_list`, `acmp_get_asset_types` | Assets und Asset-Typen |
+| 🟡 | `acmp_create_asset`, `acmp_update_asset` | Asset anlegen oder ändern |
+| 🟡 | `acmp_lend_asset`, `acmp_return_asset` | Asset verleihen oder zurücknehmen |
+| 🟢 | `acmp_get_contacts`, `_companies`, `_locations`, `_departments`, `_cost_centers` | Stammdaten lesen |
+| 🟡 | `acmp_create_*`, `acmp_update_*` für `contact`, `company`, `location`, `department` | Stammdaten anlegen oder ändern |
+| 🟢 | `acmp_get_contracts`, `acmp_contracts_expiring` *(DB)* | Verträge und bald auslaufende Verträge |
+| 🟢 | `acmp_get_custom_fields`, `_custom_field_list`, `_master_data_settings`, `_app_settings` | Zusatzfelder und Einstellungen lesen |
+
+### Helpdesk
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_get_tickets`, `acmp_get_ticket`, `acmp_tickets_by_query` | Tickets lesen, auch über gespeicherte Abfragen |
+| 🟢 | `acmp_get_ticket_comments`, `_worktime`, `_costs`, `acmp_get_linked_tickets` | Verlauf, Zeiten, Kosten, Verknüpfungen |
+| 🟢 | `acmp_helpdesk_settings`, `acmp_get_assignees`, `_ticket_templates`, `_ticket_categories`, `_ticket_resolutions`, `_queries` | Helpdesk-Einstellungen |
+| 🟡 | `acmp_create_ticket` | Ticket anlegen („Mach ein Ticket: Drucker 2. OG druckt nicht.“) |
+| 🟡 | `acmp_update_ticket` | Bearbeiter oder Priorität ändern |
+| 🟡 | `acmp_close_ticket`, `acmp_reopen_ticket` | Ticket schließen oder wieder öffnen |
+| 🟡 | `acmp_add_ticket_comment` | Kommentar ergänzen |
+
+### Fernwartung
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_teamviewer_ids` *(DB)* | TeamViewer-IDs aller Clients |
+| 🟢 | `acmp_teamviewer_connect` *(DB)* | TeamViewer-Link zu einem Rechner, Suche auch per Benutzername |
 
 Jedes Tool akzeptiert optional `format: "json"`. Beispiel-Prompts stehen in [`docs/USAGE.md`](docs/USAGE.md). Neue native Kommandos ergänzt ihr deklarativ in `api-tools.json`, neue SQL-Reports in `db-tools.json`. Beides braucht kein Neu-Kompilieren.
 
