@@ -21,6 +21,18 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Formatting = Newtonsoft.Json.Formatting;
 
+// Optionen fuer BuildScript bei neuen Versionen (acmp_cc_new_version): Schritt-IDs behalten, '***' in Kennwortfeldern durch das
+// gespeicherte Kennwort desselben Schritts der Basisversion ersetzen. Fuer alle anderen Tools null (neue IDs, '***' abgelehnt).
+class CcBuildCtx
+{
+    public bool KeepIds;
+    public HashSet<string> UsedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    // Schritt-ID -> (Klasse, Kennwortfeld -> gespeicherter Wert); null = keine Uebernahme
+    public Dictionary<string, KeyValuePair<string, Dictionary<string, string>>> Secrets;
+    public string SecretSource;     // fuer Hinweise, z.B. "v3"
+    public int SecretsTaken;
+}
+
 partial class AcmpCcWriter
 {
     readonly string _readCs, _writeCs, _templateId, _backupDir, _registryFile;
@@ -28,6 +40,8 @@ partial class AcmpCcWriter
     readonly HashSet<string> _allowedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     // acmp_cc_move / acmp_cc_add_folder nur innerhalb dieser Ordner samt Unterordnern (leer = ganzer Baum), AcmpCcFolders.cs
     readonly HashSet<string> _moveScope = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    // acmp_cc_new_version nur fuer Commands in diesen Ordnern samt Unterordnern (leer = alle ausser Aagon-Standardordnern), AcmpCcVersion.cs
+    readonly HashSet<string> _versionScope = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     // Dateien anhaengen: nur aus diesen Freigaben (sonst koennte man z.B. config.local.json in einen CC kopieren)
     readonly List<string> _fileSourceRoots = new List<string>();
     readonly string _fileRepoRoot;
@@ -52,6 +66,7 @@ partial class AcmpCcWriter
     public ICollection<string> AllowedFolders { get { return _allowedFolders; } }
     public ICollection<string> AllowedRequesters { get { return _allowed; } }
     public ICollection<string> MoveScope { get { return _moveScope; } }
+    public ICollection<string> VersionScope { get { return _versionScope; } }
 
     static readonly string[][] CommonFields = {
         new[] { "Description", null }, new[] { "_CommandComment", "" }, new[] { "ID", null }, new[] { "_DataVersion", "1" },
@@ -86,6 +101,8 @@ partial class AcmpCcWriter
         if (af != null) foreach (JToken t in af) _allowedFolders.Add(GuidBraces((string)t));
         JArray ms = cfg["moveScopeFolderIds"] as JArray;
         if (ms != null) foreach (JToken t in ms) { string g = GuidBraces((string)t); if (g != null) _moveScope.Add(g); }
+        JArray vs = cfg["versionScopeFolderIds"] as JArray;
+        if (vs != null) foreach (JToken t in vs) { string g = GuidBraces((string)t); if (g != null) _versionScope.Add(g); }
         if (string.IsNullOrEmpty(_readCs)) { DisabledReason = "db.connectionString fehlt (Lesezugang fuer Pruefung und Decoder)"; return; }
         if (string.IsNullOrEmpty(_writeCs) || _writeCs.Contains("HIER_")) { DisabledReason = "ccWriter.connectionString fehlt"; return; }
         if (_templateId == null) { DisabledReason = "ccWriter.templateScriptId fehlt"; return; }
@@ -485,6 +502,12 @@ partial class AcmpCcWriter
     // steps: [{ class, description, fields:{...}, children:[...] }]  bzw. { class, xml } fuer rohes Schritt-XML
     public CcScript BuildScript(JArray steps, JArray variables, out List<string> notes)
     {
+        return BuildScript(steps, variables, out notes, null);
+    }
+
+    // ctx (nur acmp_cc_new_version): Schritt-IDs behalten, '***' in Kennwortfeldern aus der Basisversion uebernehmen
+    public CcScript BuildScript(JArray steps, JArray variables, out List<string> notes, CcBuildCtx ctx)
+    {
         notes = new List<string>();
         var s = new CcScript(); s.Kind = 1;
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -493,13 +516,21 @@ partial class AcmpCcWriter
             {
                 var v = new CcVar();
                 if (vt.Type == JTokenType.String) v.Name = (string)vt;
-                else { var vo = (JObject)vt; v.Name = (string)vo["name"]; v.Value = vo["value"] != null ? vo["value"].ToString() : ""; v.ReadOnly = vo["readOnly"] != null && (bool)vo["readOnly"]; }
+                else
+                {
+                    var vo = (JObject)vt; v.Name = (string)vo["name"]; v.Value = vo["value"] != null ? vo["value"].ToString() : ""; v.ReadOnly = vo["readOnly"] != null && (bool)vo["readOnly"];
+                    if (vo["origin"] != null && vo["origin"].Type == JTokenType.Integer) v.Origin = (byte)(int)vo["origin"];   // wie acmp_cc_decode es ausgibt
+                }
                 if (string.IsNullOrEmpty(v.Name)) throw new Exception("Variable ohne Namen.");
                 if (!names.Add(v.Name)) throw new Exception("Variable doppelt: " + v.Name);
                 s.Vars.Add(v);
             }
         if (steps == null || steps.Count == 0) throw new Exception("steps fehlt oder ist leer.");
-        foreach (JToken t in steps) s.Roots.Add(BuildNode((JObject)t, notes));
+        foreach (JToken t in steps)
+        {
+            if (!(t is JObject)) throw new Exception("Schritt ist kein Objekt: " + t.ToString(Formatting.None));
+            s.Roots.Add(BuildNode((JObject)t, notes, ctx));
+        }
         // Variablen, in die ein Schritt schreibt, muessen als Projektvariable existieren (die Console legt sie ebenso an).
         var used = new List<string>(); CollectSetVars(s.Roots, used);
         foreach (var u in used)
@@ -620,7 +651,7 @@ partial class AcmpCcWriter
         }
     }
 
-    CcNode BuildNode(JObject st, List<string> notes)
+    CcNode BuildNode(JObject st, List<string> notes, CcBuildCtx ctx)
     {
         var n = new CcNode();
         n.Class = (string)st["class"];
@@ -628,19 +659,34 @@ partial class AcmpCcWriter
         string raw = st["xml"] != null ? (string)st["xml"] : null;
         if (!string.IsNullOrEmpty(raw))
         {
-            // Rohes XML: neue Schritt-ID vergeben, damit keine IDs aus anderen Commands doppelt vorkommen
+            // Rohes XML: neue Schritt-ID vergeben, damit keine IDs aus anderen Commands doppelt vorkommen (neue Version: ID behalten)
             var doc = new XmlDocument(); doc.LoadXml(raw);
             if (doc.DocumentElement.Name != n.Class) throw new Exception("XML-Wurzel " + doc.DocumentElement.Name + " passt nicht zu class " + n.Class);
+            var idEl = doc.DocumentElement["ID"];
+            string given = idEl != null ? idEl.InnerText : null;
+            string sid = StepId(ctx, given, notes);
+            var descEl = doc.DocumentElement["Description"];
             foreach (XmlNode e in doc.DocumentElement.ChildNodes)
-                if (e.NodeType == XmlNodeType.Element) RejectMaskedSecret(n.Class, e.Name, e.InnerText);
-            var idEl = doc.DocumentElement["ID"]; if (idEl != null) idEl.InnerText = NewGuid();
+                if (e.NodeType == XmlNodeType.Element && !HasElementChild(e))
+                {
+                    string nv = SecretOrReject(ctx, sid, given, n.Class, e.Name, e.InnerText, descEl != null ? descEl.InnerText : "", notes);
+                    if (nv != e.InnerText) e.InnerText = nv;   // nur ersetzte Kennwoerter anfassen, sonst bleibt das XML wie geliefert
+                }
+            if (idEl != null) idEl.InnerText = sid;
             n.Xml = CcFormat.StepXml(doc.DocumentElement.OuterXml);
         }
         else
         {
-            JObject fields = st["fields"] as JObject ?? new JObject();
-            foreach (JProperty p in fields.Properties())
-                if (p.Value.Type == JTokenType.String) RejectMaskedSecret(n.Class, p.Name, (string)p.Value);
+            JObject fields = (JObject)(st["fields"] as JObject ?? new JObject()).DeepClone();
+            string given = st["id"] != null && st["id"].Type == JTokenType.String ? (string)st["id"] : null;
+            string sid = StepId(ctx, given, notes);
+            string descGiven = st["description"] != null ? (string)st["description"] : "";
+            foreach (JProperty p in new List<JProperty>(fields.Properties()))
+                if (p.Value.Type == JTokenType.String)
+                {
+                    string ov = (string)p.Value, nv = SecretOrReject(ctx, sid, given, n.Class, p.Name, ov, descGiven, notes);
+                    if (nv != ov) p.Value = new JValue(nv);
+                }
             string desc = st["description"] != null ? (string)st["description"] : null;
             if (string.IsNullOrEmpty(desc))
             {
@@ -656,7 +702,7 @@ partial class AcmpCcWriter
                 string name = cf[0];
                 JToken v = fields[name];
                 if (name == "Description") AppendField(sb, name, new JValue(desc));
-                else if (name == "ID") AppendField(sb, name, new JValue(NewGuid()));
+                else if (name == "ID") AppendField(sb, name, new JValue(sid));
                 else AppendField(sb, name, v != null ? v : new JValue(cf[1]));
                 done.Add(name);
             }
@@ -667,8 +713,44 @@ partial class AcmpCcWriter
             new XmlDocument().LoadXml(n.Xml);   // Wohlgeformtheit pruefen
         }
         JArray ch = st["children"] as JArray;
-        if (ch != null) foreach (JToken k in ch) n.Children.Add(BuildNode((JObject)k, notes));
+        if (ch != null)
+            foreach (JToken k in ch)
+            {
+                if (!(k is JObject)) throw new Exception("Schritt ist kein Objekt: " + k.ToString(Formatting.None));
+                n.Children.Add(BuildNode((JObject)k, notes, ctx));
+            }
         return n;
+    }
+
+    // Schritt-ID: neu vergeben (Standard) bzw. bei neuen Versionen die angegebene behalten, solange sie gueltig und eindeutig ist
+    static string StepId(CcBuildCtx ctx, string given, List<string> notes)
+    {
+        if (ctx == null || !ctx.KeepIds) return NewGuid();
+        string g = GuidBraces(given);
+        if (g != null && ctx.UsedIds.Add(g)) return g;
+        if (g != null) notes.Add("Schritt-ID " + g + " kommt mehrfach vor - neue ID vergeben.");
+        string n = NewGuid(); ctx.UsedIds.Add(n);
+        return n;
+    }
+
+    // '***' in einem Kennwortfeld: bei neuen Versionen das gespeicherte Kennwort desselben Schritts (gleiche ID und Klasse)
+    // aus der Basisversion nehmen, sonst ablehnen wie bisher. Der Wert erscheint nie in Hinweisen oder Vorschau.
+    static string SecretOrReject(CcBuildCtx ctx, string sid, string given, string cls, string field, string value, string desc, List<string> notes)
+    {
+        if (value != "***" || !SecretField.IsMatch(field)) return value;
+        string g = GuidBraces(given);
+        KeyValuePair<string, Dictionary<string, string>> e; string stored;
+        if (ctx != null && ctx.Secrets != null && g != null && g == sid && ctx.Secrets.TryGetValue(g, out e) && e.Key == cls &&
+            e.Value.TryGetValue(field, out stored) && !string.IsNullOrEmpty(stored))
+        {
+            ctx.SecretsTaken++;
+            notes.Add("Schritt \"" + desc + "\" [" + cls + "], Feld " + field + ": gespeichertes Kennwort aus " + (ctx.SecretSource ?? "der Basisversion") + " uebernommen (gleiche Schritt-ID).");
+            return stored;
+        }
+        if (ctx != null && ctx.Secrets != null)
+            throw new Exception("Schritt " + cls + " \"" + desc + "\", Feld " + field + ": '***' ist der maskierte Platzhalter aus acmp_cc_decode. Uebernommen wird ein gespeichertes Kennwort nur fuer einen Schritt mit derselben id und Klasse wie in der Basisversion - sonst Feld leer lassen und das Kennwort in der ACMP-Console eintragen.");
+        RejectMaskedSecret(cls, field, value);
+        return value;
     }
 
     static void AppendField(StringBuilder sb, string name, JToken v)
@@ -742,9 +824,23 @@ partial class AcmpCcWriter
         string file = Path.Combine(_backupDir, backupName);
         if (!File.Exists(file)) throw new Exception("Sicherung nicht gefunden: " + backupName);
         JObject b = JObject.Parse(File.ReadAllText(file));
+        CheckRestorable(b, backupName);
         var head = new List<string> { "Entwurf " + (string)b["scriptId"] + " v" + b["version"] + " auf die Sicherung " + backupName + " zuruecksetzen.",
                                       "Name danach: " + (string)b["DESCRIPTION"] + " | Inhalt danach:" };
         return PreviewScript(head, CcFormat.Decode(B64((string)b["CLIENTSCRIPT"])));
+    }
+
+    // Zuruecksetzen: Sicherungen eigener Entwuerfe (ohne kind, von acmp_cc_update_draft/restore_draft) und fremder Entwuerfe,
+    // die acmp_cc_new_version mit replaceDraft ueberschrieben hat (kind "newversion-draft"). Andere Sicherungen gehoeren zu anderen Tools.
+    void CheckRestorable(JObject b, string backupName)
+    {
+        string kind = b["kind"] != null && b["kind"].Type == JTokenType.String ? (string)b["kind"] : null;
+        if (kind == "newversion-insert")
+            throw new Exception(backupName + " gehoert zu einer neu angelegten Version (acmp_cc_new_version) - dabei wurde nichts ueberschrieben. " +
+                "Die neue Version ist ein Entwurf: in der Console verwerfen oder mit acmp_cc_new_version erneut ueberschreiben.");
+        if (kind != null && kind != "newversion-draft") throw new Exception(backupName + " ist keine Entwurfs-Sicherung (Art \"" + kind + "\") - dafuer gibt es das undo des jeweiligen Tools.");
+        if (b["scriptId"] == null || b["version"] == null || b["CLIENTSCRIPT"] == null) throw new Exception(backupName + " ist keine Entwurfs-Sicherung.");
+        if (kind == null && !IsRegistered((string)b["scriptId"])) throw new Exception("Nur vom MCP angelegte Entwuerfe duerfen zurueckgesetzt werden.");
     }
 
     // Datei anhaengen: vor der Freigabe pruefen und Pruefsumme festhalten (die Ausfuehrung vergleicht sie)
@@ -840,7 +936,7 @@ partial class AcmpCcWriter
         CheckWrite(requester);
         string id = GuidBraces(scriptId);
         if (id == null) throw new Exception("scriptId ist keine GUID.");
-        if (!IsRegistered(id)) throw new Exception("Nur vom MCP angelegte Entwuerfe duerfen geaendert werden (" + id + " ist nicht in cc-drafts.json).");
+        if (!IsRegistered(id)) throw new Exception("Nur vom MCP angelegte Entwuerfe duerfen geaendert werden (" + id + " ist nicht in cc-drafts.json). Fuer eine neue Version eines vorhandenen (auch freigegebenen oder fremden) Commands: acmp_cc_new_version.");
         lock (_lock)
         using (var c = new SqlConnection(_writeCs))
         {
@@ -889,8 +985,8 @@ partial class AcmpCcWriter
         string file = Path.Combine(_backupDir, backupName);
         if (!File.Exists(file)) throw new Exception("Sicherung nicht gefunden: " + backupName);
         JObject b = JObject.Parse(File.ReadAllText(file));
+        CheckRestorable(b, backupName);
         string id = (string)b["scriptId"]; int ver = (int)b["version"];
-        if (!IsRegistered(id)) throw new Exception("Nur vom MCP angelegte Entwuerfe duerfen zurueckgesetzt werden.");
         lock (_lock)
         using (var c = new SqlConnection(_writeCs))
         {
@@ -1136,7 +1232,7 @@ partial class AcmpCcWriter
             if (!r.Read()) throw new Exception("Client Command " + id + " nicht gefunden.");
             ver = r.GetInt32(0);
             int st = Convert.ToInt32(r.GetValue(1));
-            if (st != 1) throw new Exception("Command ist kein Entwurf mehr (State " + st + ") - Aendern freigegebener Commands ist noch nicht erlaubt.");
+            if (st != 1) throw new Exception("Command ist kein Entwurf mehr (State " + st + ") - fuer Aenderungen eine neue Version anlegen: acmp_cc_new_version.");
             b["scriptId"] = id; b["version"] = ver; b["grund"] = reason; b["zeit"] = DateTime.Now.ToString("s");
             b["DESCRIPTION"] = r.IsDBNull(2) ? null : r.GetString(2);
             b["LONGDESCRIPTION"] = r.IsDBNull(3) ? null : r.GetString(3);

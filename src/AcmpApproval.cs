@@ -367,6 +367,7 @@ class AcmpApproval
         if (pv != null)
         {
             steps.Add(tool == "acmp_cc_release" ? "Gibt Client Commands direkt in der ACMP-Datenbank frei (danach per Kiosk/Job ausführbar):"
+                    : tool == "acmp_cc_new_version" ? "Legt eine neue Version eines vorhandenen Client Commands als Entwurf an (wirksam erst nach Freigabe in der Console):"
                                                 : "Schreibt direkt in die ACMP-Datenbank (CC-Writer, nur Entwürfe):");
             int shown = 0;
             foreach (JToken t in pv)
@@ -1412,9 +1413,11 @@ class AcmpApproval
         {
             bool kiosk = ((string)r["command"] ?? "").StartsWith("acmp_kiosk_");
             bool release = (string)r["command"] == "acmp_cc_release";
+            bool newVersion = (string)r["command"] == "acmp_cc_new_version";
             sb.Append("<h2>Was wird ausgeführt</h2><div class=\"runbox\"><div class=\"lbl\">")
               .Append(Esc((string)r["command"])).Append(kiosk ? " — schreibt direkt in die ACMP-Datenbank (Kiosk)"
                   : release ? " — gibt Client Commands frei (danach per Kiosk/Job auf Clients ausführbar)"
+                  : newVersion ? " — legt eine neue Version als Entwurf an (die freigegebene Version läuft weiter, bis die neue in der Console freigegeben wird)"
                   : " — schreibt direkt in die ACMP-Datenbank (nur Entwürfe, Freigabe danach in der Console)").Append("</div><pre class=\"script\">");
             foreach (JToken t in dprev) sb.Append(Esc((string)t)).Append("\n");
             sb.Append("</pre>").Append(PreviewImageHtml(r["previewImage"] as JObject));
