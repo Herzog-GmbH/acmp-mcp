@@ -35,6 +35,34 @@
     "variableName": "SCRIPT"
   },
 
+  "ccWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Legt Client Commands als ENTWURF direkt in der ACMP-Datenbank an: acmp_cc_create_draft, _update_draft, _restore_draft, _add_file, _remove_file und acmp_lib_install. Dazu acmp_cc_release (eigene Entwuerfe freigeben, IMMER mit Freigabe-Anfrage), acmp_cc_move / acmp_cc_add_folder / acmp_cc_update_folder (Client-Command-Ordner). Direktes Schreiben in die DB ist von Aagon nicht vorgesehen - nur mit Testordner, eigenem SQL-Login (grant-cc-writer.sql) und DB-Sicherung. Einrichten mit setup-cc-writer.ps1 (als Admin), Anleitung in docs/ACMP-VORBEREITUNG.md. Jede Schreibaktion laeuft ueber die Vier-Augen-Freigabe (approvalGate) und nur nach bestandener Kompatibilitaetspruefung (Tool acmp_cc_writer_status). Lesen (acmp_cc_decode, acmp_cc_catalog, acmp_cc_folders) braucht nur db.connectionString. moveScopeFolderIds (optional): Ordner-Tools nur innerhalb dieser Ordner samt Unterordnern.",
+    "enabled": false,
+    "connectionString": "Server=HIER_SQL_INSTANZ;Database=ACMP;User ID=acmp_mcp_ccwriter;Password=HIER_KENNWORT;Application Name=ACMP-MCP-CcWriter;Connect Timeout=15",
+    "templateScriptId": "HIER_GUID_VORLAGE",
+    "allowedRequesters": [],
+    "allowedFolderIds": [],
+    "approvalGate": true,
+    "allowUntested": false,
+    "fileSourceRoots": [],
+    "fileRepositoryRoot": "",
+    "maxFileMB": 2048,
+    "moveScopeFolderIds": [],
+    "backupDir": "cc-backups"
+  },
+
+  "kioskWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Kiosk-Eintraege, -Ordner, Sichtbarkeitsfilter und Icons direkt in der ACMP-Datenbank pflegen (acmp_kiosk_add_item, _set_filter, _remove_item, _update_items, _add_group, _update_group, _add_image, _set_image, _remove_image, _restore). Lesen (acmp_kiosk_tree, acmp_kiosk_images) braucht nur db.connectionString. Nutzt denselben SQL-Login wie der CC-Writer (Rechte: grant-kiosk-writer.sql) und dessen allowedRequesters, solange hier keine eigenen stehen. Geschrieben wird nur in Kiosk-Ordnern aus allowedGroupIds und in Ordnern, die der MCP selbst angelegt hat. Bild-Tools zusaetzlich: imageRepositoryDir (Ordner Images im File Repository des ACMP-Servers) und imageSourceRoots (UNC-Ordner, aus denen Bilder gelesen werden duerfen). Einrichten mit setup-kiosk-writer.ps1 (als Admin), Pruefung: acmp_kiosk_tree mit status=true.",
+    "enabled": false,
+    "allowedGroupIds": [],
+    "approvalGate": true,
+    "allowUntested": false,
+    "imageRepositoryDir": "",
+    "imageSourceRoots": [],
+    "maxImageKB": 512,
+    "backupDir": "kiosk-backups"
+  },
+
   "approval": {
     "_hinweis": "Vier-Augen-Freigabe fuer Schreib-/Ausfuehr-/Loeschkommandos. Mit leerem 'approvers' startet der Server im Ersteinrichtungs-Modus: beim Start wird ein einmaliger Setup-Link ins Log geschrieben (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator/Freigeber ohne manuelles JSON-Editieren per Weboberflaeche (/setup) anlegen koennt. Weitere Bediener danach ueber /onboarding.",
     "enabled": true,

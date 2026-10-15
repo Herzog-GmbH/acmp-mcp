@@ -163,7 +163,7 @@
                          "name":  "name",
                          "required":  true,
                          "kind":  "string",
-                         "description":  "Teilstring des Container-Namens. Der Host kann den reinen Suchbegriff uebergeben (das SQL baut LIKE \u0027%\u0027+@name+\u0027%\u0027) oder bereits mit %-Wildcards. Beispiel: \u0027Oldenburg\u0027."
+                         "description":  "Teilstring des Container-Namens. Der Host kann den reinen Suchbegriff uebergeben (das SQL baut LIKE \u0027%\u0027+@name+\u0027%\u0027) oder bereits mit %-Wildcards. Beispiel: \u0027Hauptsitz\u0027."
                      }
                  ]
     },
@@ -340,5 +340,92 @@
                          "description":  "Freitext-Suche: Computername (z.B. PC-0815), Windows-Login (z.B. m.mustermann), Nachname (z.B. Mustermann) oder E-Mail (z.B. m.mustermann@example.com)."
                      }
                  ]
+    },
+    {
+        "name":  "acmp_db_columns",
+        "description":  "Spalten einer ACMP-DB-Tabelle oder -View (Name, Typ, Laenge, Nullbar). Fuer die Analyse unbekannter Tabellen, z.B. SYS_SCRIPTS.",
+        "sql":  "SELECT ORDINAL_POSITION AS Pos, COLUMN_NAME AS Spalte, DATA_TYPE AS Typ, CHARACTER_MAXIMUM_LENGTH AS Laenge, IS_NULLABLE AS Nullbar FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @table ORDER BY ORDINAL_POSITION",
+        "args":  [
+                     {
+                         "name":  "table",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Exakter Tabellen-/View-Name, z.B. SYS_SCRIPTS."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_db_script_rows",
+        "description":  "Zeilen aus Client-Command-/Script-Tabellen (SYS_SCRIPT*, VW_SYS_Script*, CLT_SCRIPT*, SYS_Kiosk*, SYS_CustomField*, SYS_FileRepo*, VW_Kiosk*, SYS_MultiLanguageItems*, SYS_CustomImages*, SYS_AccessControl_AclEntries_*, SYS_Folders*, VW_Folders*, SYS_TableRelations). Binaerspalten erscheinen nur als \u003cSpalte\u003e__bytes (Laenge), lange Texte gekuerzt auf 4000 Zeichen, XML-Spalten auf 30000. Filter: value (GUID/Text, % = LIKE) auf column; ohne column wird die SCRIPTID-Spalte genommen.",
+        "sql":  "DECLARE @t sysname, @c sysname, @cols nvarchar(max), @sql nvarchar(max), @n int, @g uniqueidentifier, @v nvarchar(400), @ct sysname;\nSET @n = ISNULL(@top, 20); IF @n \u003e 200 SET @n = 200; IF @n \u003c 1 SET @n = 1;\nSELECT @t = TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = @table AND (TABLE_NAME LIKE \u0027SYS[_]SCRIPT%\u0027 OR TABLE_NAME LIKE \u0027VW[_]SYS[_]Script%\u0027 OR TABLE_NAME LIKE \u0027CLT[_]SCRIPT%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027VW[_]SYS[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]CustomField%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]FileRepo%\u0027 OR TABLE_NAME LIKE \u0027VW[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]MultiLanguageItems%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]CustomImages%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]AccessControl[_]AclEntries[_]%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]Folders%\u0027 OR TABLE_NAME LIKE \u0027VW[_]Folders%\u0027 OR TABLE_NAME = \u0027SYS_TableRelations\u0027);\nIF @t IS NULL BEGIN SELECT N\u0027Tabelle nicht vorhanden oder nicht freigegeben (erlaubt: SYS_SCRIPT*, VW_SYS_Script*, CLT_SCRIPT*, SYS_Kiosk*, VW_SYS_Kiosk*, SYS_CustomField*, SYS_FileRepo*, VW_Kiosk*, SYS_MultiLanguageItems*, SYS_CustomImages*, SYS_AccessControl_AclEntries_*, SYS_Folders*, VW_Folders*, SYS_TableRelations)\u0027 AS Fehler; RETURN; END;\nIF @column IS NOT NULL SELECT @c = COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = @column\nELSE IF @value IS NOT NULL SELECT TOP 1 @c = COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME IN (\u0027SCRIPTID\u0027,\u0027ScriptId\u0027,\u0027SCRIPT_ID\u0027,\u0027ScriptID\u0027,\u0027Id\u0027,\u0027ID\u0027) ORDER BY CASE WHEN COLUMN_NAME LIKE \u0027%SCRIPT%\u0027 THEN 0 ELSE 1 END;\nIF @value IS NOT NULL AND @c IS NULL BEGIN SELECT N\u0027Filterspalte nicht gefunden - mit column angeben (siehe acmp_db_columns).\u0027 AS Fehler; RETURN; END;\nSET @g = TRY_CONVERT(uniqueidentifier, @value);\nSET @v = CASE WHEN @g IS NOT NULL THEN N\u0027{\u0027 + CAST(@g AS nvarchar(36)) + N\u0027}\u0027 ELSE @value END; -- ACMP speichert GUIDs in Textspalten MIT {}\nIF @c IS NOT NULL SELECT @ct = DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = @c; -- uniqueidentifier-Spalten typgerecht vergleichen\nSET @cols = STUFF((SELECT N\u0027, \u0027 + CASE WHEN DATA_TYPE IN (\u0027varbinary\u0027,\u0027image\u0027,\u0027binary\u0027,\u0027timestamp\u0027) THEN N\u0027DATALENGTH(\u0027 + QUOTENAME(COLUMN_NAME) + N\u0027) AS \u0027 + QUOTENAME(COLUMN_NAME + N\u0027__bytes\u0027) WHEN DATA_TYPE = \u0027xml\u0027 THEN N\u0027LEFT(CAST(\u0027 + QUOTENAME(COLUMN_NAME) + N\u0027 AS nvarchar(max)), 30000) AS \u0027 + QUOTENAME(COLUMN_NAME) WHEN DATA_TYPE IN (\u0027ntext\u0027,\u0027text\u0027) OR (DATA_TYPE IN (\u0027nvarchar\u0027,\u0027varchar\u0027) AND CHARACTER_MAXIMUM_LENGTH = -1) THEN N\u0027LEFT(CAST(\u0027 + QUOTENAME(COLUMN_NAME) + N\u0027 AS nvarchar(max)), 4000) AS \u0027 + QUOTENAME(COLUMN_NAME) ELSE QUOTENAME(COLUMN_NAME) END FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t ORDER BY ORDINAL_POSITION FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, N\u0027\u0027);\nSET @sql = N\u0027SELECT TOP (\u0027 + CAST(@n AS nvarchar(10)) + N\u0027) \u0027 + @cols + N\u0027 FROM \u0027 + QUOTENAME(@t)\n  + CASE WHEN @value IS NULL THEN N\u0027\u0027 WHEN @g IS NOT NULL AND @ct = \u0027uniqueidentifier\u0027 THEN N\u0027 WHERE \u0027 + QUOTENAME(@c) + N\u0027 = @g\u0027 WHEN CHARINDEX(N\u0027%\u0027, @v) \u003e 0 THEN N\u0027 WHERE CAST(\u0027 + QUOTENAME(@c) + N\u0027 AS nvarchar(400)) LIKE @v\u0027 ELSE N\u0027 WHERE CAST(\u0027 + QUOTENAME(@c) + N\u0027 AS nvarchar(400)) = @v\u0027 END;\nEXEC sp_executesql @sql, N\u0027@v nvarchar(400), @g uniqueidentifier\u0027, @v = @v, @g = @g;",
+        "args":  [
+                     {
+                         "name":  "table",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Tabelle, z.B. SYS_SCRIPTS, SYS_SCRIPT_FILES, SYS_SCRIPTS_VARIABLES."
+                     },
+                     {
+                         "name":  "value",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Filterwert, z.B. ScriptId-GUID aus acmp_get_client_commands. Mit % als LIKE."
+                     },
+                     {
+                         "name":  "column",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Filterspalte (Standard: SCRIPTID-Spalte der Tabelle)."
+                     },
+                     {
+                         "name":  "top",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Max. Zeilen (Standard 20, max 200)."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_db_script_blob",
+        "description":  "Ausschnitt einer Binaerspalte (z.B. SYS_SCRIPTS.CLIENTSCRIPT) als Hex, seitenweise ueber offset/length. Nur Tabellen der Positivliste von acmp_db_script_rows.",
+        "sql":  "DECLARE @t sysname, @b sysname, @k sysname, @sql nvarchar(max), @o int, @l int, @g uniqueidentifier, @v nvarchar(400), @kt sysname;\nSET @o = ISNULL(@offset, 0); IF @o \u003c 0 SET @o = 0;\nSET @l = ISNULL(@length, 8000); IF @l \u003e 60000 SET @l = 60000; IF @l \u003c 1 SET @l = 1;\nSELECT @t = TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = @table AND (TABLE_NAME LIKE \u0027SYS[_]SCRIPT%\u0027 OR TABLE_NAME LIKE \u0027VW[_]SYS[_]Script%\u0027 OR TABLE_NAME LIKE \u0027CLT[_]SCRIPT%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027VW[_]SYS[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]CustomField%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]FileRepo%\u0027 OR TABLE_NAME LIKE \u0027VW[_]Kiosk%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]MultiLanguageItems%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]CustomImages%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]AccessControl[_]AclEntries[_]%\u0027 OR TABLE_NAME LIKE \u0027SYS[_]Folders%\u0027 OR TABLE_NAME LIKE \u0027VW[_]Folders%\u0027 OR TABLE_NAME = \u0027SYS_TableRelations\u0027);\nIF @t IS NULL BEGIN SELECT N\u0027Tabelle nicht vorhanden oder nicht freigegeben (erlaubt: SYS_SCRIPT*, VW_SYS_Script*, CLT_SCRIPT*, SYS_Kiosk*, VW_SYS_Kiosk*, SYS_CustomField*, SYS_FileRepo*, VW_Kiosk*, SYS_MultiLanguageItems*, SYS_CustomImages*, SYS_AccessControl_AclEntries_*, SYS_Folders*, VW_Folders*, SYS_TableRelations)\u0027 AS Fehler; RETURN; END;\nSELECT @b = COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = @column AND DATA_TYPE IN (\u0027varbinary\u0027,\u0027image\u0027,\u0027binary\u0027);\nIF @b IS NULL BEGIN SELECT N\u0027Spalte nicht gefunden oder keine Binaerspalte.\u0027 AS Fehler; RETURN; END;\nSELECT @k = COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = ISNULL(@keyColumn, N\u0027\u0027);\nIF @k IS NULL SELECT TOP 1 @k = COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME IN (\u0027SCRIPTID\u0027,\u0027ScriptId\u0027,\u0027SCRIPT_ID\u0027,\u0027ScriptID\u0027,\u0027Id\u0027,\u0027ID\u0027) ORDER BY CASE WHEN COLUMN_NAME LIKE \u0027%SCRIPT%\u0027 THEN 0 ELSE 1 END;\nIF @k IS NULL BEGIN SELECT N\u0027Schluesselspalte nicht gefunden - keyColumn angeben.\u0027 AS Fehler; RETURN; END;\nSET @g = TRY_CONVERT(uniqueidentifier, @value);\nSET @v = CASE WHEN @g IS NOT NULL THEN N\u0027{\u0027 + CAST(@g AS nvarchar(36)) + N\u0027}\u0027 ELSE @value END; -- ACMP speichert GUIDs in Textspalten MIT {}\nSELECT @kt = DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = @k; -- uniqueidentifier-Schluessel typgerecht vergleichen\nSET @sql = N\u0027SELECT TOP (10) CAST(\u0027 + QUOTENAME(@k) + N\u0027 AS nvarchar(400)) AS Schluessel, DATALENGTH(\u0027 + QUOTENAME(@b) + N\u0027) AS BytesGesamt, @o AS Offset, CONVERT(varchar(max), CAST(SUBSTRING(\u0027 + QUOTENAME(@b) + N\u0027, @o + 1, @l) AS varbinary(max)), 2) AS Hex FROM \u0027 + QUOTENAME(@t) + CASE WHEN @g IS NOT NULL AND @kt = \u0027uniqueidentifier\u0027 THEN N\u0027 WHERE \u0027 + QUOTENAME(@k) + N\u0027 = @g\u0027 ELSE N\u0027 WHERE CAST(\u0027 + QUOTENAME(@k) + N\u0027 AS nvarchar(400)) = @v\u0027 END;\nEXEC sp_executesql @sql, N\u0027@v nvarchar(400), @g uniqueidentifier, @o int, @l int\u0027, @v = @v, @g = @g, @o = @o, @l = @l;",
+        "args":  [
+                     {
+                         "name":  "table",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Tabelle, z.B. SYS_SCRIPTS."
+                     },
+                     {
+                         "name":  "column",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Binaerspalte, z.B. CLIENTSCRIPT."
+                     },
+                     {
+                         "name":  "value",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Schluesselwert (meist ScriptId-GUID)."
+                     },
+                     {
+                         "name":  "keyColumn",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Schluesselspalte (Standard: SCRIPTID-Spalte)."
+                     },
+                     {
+                         "name":  "offset",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Start-Byte (Standard 0)."
+                     },
+                     {
+                         "name":  "length",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Anzahl Bytes (Standard 8000, max 60000)."
+                     }
+                 ]
     }
-]
+]

@@ -29,6 +29,9 @@ class AcmpApproval
     public string CfgPath;
     public HashSet<string> NoApprovalTools;
     public bool BypassAll;
+    // Tools, die immer mindestens eine Zustimmung brauchen - auch bei bypassAll oder Zaehlwert 0 (z.B. acmp_cc_release:
+    // die Freigabe eines Client Commands ersetzt den Klick in der Console). Der Server leitet sie unabhaengig von bypassAll ans Gate.
+    public HashSet<string> AlwaysGatedTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> GatedToolTiers;
     public Func<JArray> GetAllTools;
     public Dictionary<string, int> ToolApprovalCounts;
@@ -60,6 +63,7 @@ class AcmpApproval
     public Func<string, string> ResolveClientName;
     public Func<string, string> ResolveClientUser;
     public Func<string, string> ResolveCommandName;
+    public Func<string, JObject> ResolveCommandSnapshot;   // freigegebene Version eines Client Commands: Name, Version, hash, lines
 
     readonly object _gate = new object();
     Dictionary<string, JObject> _reqs = new Dictionary<string, JObject>();
@@ -231,6 +235,12 @@ class AcmpApproval
             string g = ccm.Groups[1].Value;
             f["commandGuid"] = g;
             string nm = SafeResolve(ResolveCommandName, g); if (nm != null) f["commandName"] = nm;
+            // Inhalt der ausfuehrbaren Version einfrieren: Anzeige fuer die Freigeber + Hash fuer die Pruefung vor der Ausfuehrung
+            if (ResolveCommandSnapshot != null)
+            {
+                try { JObject sn = ResolveCommandSnapshot(g); if (sn != null) f["commandSnapshot"] = sn; }
+                catch (Exception ex) { f["commandSnapshotError"] = ex.Message; }
+            }
         }
         f["ignoreMaintenance"] = Regex.IsMatch(p, "<CanIgnoreMaintenanceTimes>\\s*true", RegexOptions.IgnoreCase);
 
@@ -317,6 +327,21 @@ class AcmpApproval
         {
             string a = f["commandName"] != null ? (string)f["commandName"] : (string)f["commandGuid"];
             steps.Add("Führt dort die Aktion „" + a + "“ aus.");
+            JObject sn = f["commandSnapshot"] as JObject;
+            if (sn != null && sn["released"] != null && !(bool)sn["released"])
+                steps.Add("⚠ Die Aktion hat keine freigegebene Version – ACMP wird sie nicht ausführen.");
+            else if (sn != null && sn["lines"] is JArray)
+            {
+                steps.Add("Die Aktion (freigegebene Version " + sn["version"] + ") besteht aus diesen Schritten:");
+                int shown = 0;
+                foreach (JToken t in (JArray)sn["lines"])
+                {
+                    string ln = (string)t;
+                    if (!Regex.IsMatch(ln, @"^\s*\d+(\.\d+)*\. ")) continue;   // nur Schrittzeilen, Felder stehen auf der Seite
+                    if (shown++ >= 30) { steps.Add("    … (weitere Schritte auf der Freigabeseite)"); break; }
+                    steps.Add("    " + ln.TrimEnd());
+                }
+            }
         }
         JArray vs = f["vars"] as JArray;
         if (vs != null)
@@ -338,6 +363,18 @@ class AcmpApproval
                 }
                 else steps.Add("Setzt Variable „" + nm + "“ = " + val);
             }
+        JArray pv = f["preview"] as JArray;
+        if (pv != null)
+        {
+            steps.Add(tool == "acmp_cc_release" ? "Gibt Client Commands direkt in der ACMP-Datenbank frei (danach per Kiosk/Job ausführbar):"
+                                                : "Schreibt direkt in die ACMP-Datenbank (CC-Writer, nur Entwürfe):");
+            int shown = 0;
+            foreach (JToken t in pv)
+            {
+                if (shown++ >= 40) { steps.Add("    … (vollständig auf der Freigabeseite)"); break; }
+                steps.Add("    " + ((string)t).TrimEnd());
+            }
+        }
         JArray ids = f["objectIds"] as JArray;
         if (ids != null && ids.Count > 0)
         {
@@ -346,7 +383,7 @@ class AcmpApproval
         }
         if (f["ignoreMaintenance"] != null && (bool)f["ignoreMaintenance"])
             steps.Add("Ignoriert das Wartungsfenster → läuft sofort, nicht erst im nächsten Wartungszeitraum.");
-        if (!hasClient && !hasCmd && (ids == null || ids.Count == 0))
+        if (!hasClient && !hasCmd && pv == null && (ids == null || ids.Count == 0))
             steps.Add("Führt das Kommando „" + (string)f["command"] + "“ mit dem links gezeigten Inhalt aus.");
         string tier = f["tier"] != null ? (string)f["tier"] : "";
         steps.Add("Einstufung: " + tier + (tier == "Destructive" ? " – reale Ausführung/Änderung auf dem Zielsystem." : "."));
@@ -551,6 +588,20 @@ class AcmpApproval
         return Enqueue(r, tool, command, inner, scanExtra, tier, intent, requester);
     }
 
+    // Lokale Aktion des MCP (z.B. CC-Writer: Entwurf direkt in die DB). inner = eingefrorene Argumente (JSON),
+    // preview = lesbare Vorschau fuer Seite und Mail. Ausgefuehrt wird ueber den Executor (mode "local").
+    // image (optional) = {mime, data (Base64), name, label}: Bild, das die Freigabe-Seite zeigt (Kiosk-Icons)
+    public string EnqueueLocal(string tool, string argsJson, JArray preview, string intent, string requester, JObject image = null)
+    {
+        JObject r = new JObject();
+        r["mode"] = "local"; r["command"] = tool; r["version"] = 0; r["inner"] = argsJson; r["raw"] = null;
+        r["preview"] = preview;
+        if (image != null) r["previewImage"] = image;
+        var sb = new StringBuilder();
+        if (preview != null) foreach (JToken t in preview) sb.Append((string)t).Append("\n");
+        return Enqueue(r, tool, tool, "", sb.ToString(), RiskTier.Write, intent, requester);
+    }
+
     public string EnqueuePublish(string tool, string raw, RiskTier tier, string intent, string requester)
     {
         JObject r = new JObject();
@@ -638,6 +689,9 @@ class AcmpApproval
     static string Hash(JObject r)
     {
         string s = (string)r["mode"] + "|" + (string)r["command"] + "|" + (r["version"] != null ? r["version"].ToString() : "") + "|" + (r["inner"] != null ? (string)r["inner"] : "") + "|" + (r["raw"] != null ? (string)r["raw"] : "");
+        // Fingerabdruck des freigegebenen Client Commands gehoert zur eingefrorenen Anfrage (aeltere Anfragen ohne Snapshot: Hash unveraendert)
+        JObject sn = r["commandSnapshot"] as JObject;
+        if (sn != null && sn["hash"] != null && ((string)sn["hash"]).Length > 0) s += "|cc:" + (string)sn["hash"];
         using (SHA256 h = SHA256.Create())
         {
             byte[] b = h.ComputeHash(Encoding.UTF8.GetBytes(s));
@@ -950,6 +1004,29 @@ class AcmpApproval
     {
         if (s == null) return "";
         return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+    }
+
+    // Bild der Freigabe (Kiosk-Icons) als <img> mit Daten-URI. Nur bekannte Bildtypen und reines Base64;
+    // SVG laeuft im <img> ohne Skripte. Sonst nichts anzeigen.
+    static readonly string[] PreviewMimes = { "image/png", "image/jpeg", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml" };
+    static readonly Regex Base64Only = new Regex(@"^[A-Za-z0-9+/]+={0,2}$");
+    static string PreviewImageHtml(JObject img)
+    {
+        if (img == null) return "";
+        string mime = (string)img["mime"], data = (string)img["data"];
+        if (mime == null || data == null || Array.IndexOf(PreviewMimes, mime) < 0 || data.Length > 2000000 || !Base64Only.IsMatch(data)) return "";
+        string label = img["label"] != null ? (string)img["label"] : "Bild";
+        return "<div style=\"margin:10px 0 0;display:flex;gap:14px;align-items:center\">" +
+               "<img alt=\"Vorschau\" src=\"data:" + mime + ";base64," + data + "\" style=\"max-width:160px;max-height:160px;background:#fff;padding:8px;border:1px solid #888;border-radius:6px\">" +
+               "<div><div class=\"lbl\">" + Esc(label) + "</div>" + Esc(img["name"] != null ? (string)img["name"] : "") + "</div></div>";
+    }
+
+    // Roh-Befehl lesbar halten: eingebettete Bilddaten (_data) nur mit Laenge zeigen
+    static readonly Regex DataField = new Regex("\"_data\":\"([A-Za-z0-9+/=]{200,})\"");
+    static string ShortenData(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        return DataField.Replace(s, delegate(Match m) { return "\"_data\":\"(" + m.Groups[1].Value.Length + " Zeichen Base64 - Bild oben)\""; });
     }
 
     // Vollstaendiges HTML-Geruest mit Kopfbereich (Brand oder Navigationsleiste) + Footer.
@@ -1329,6 +1406,21 @@ class AcmpApproval
         if (r["ignoreMaintenance"] != null && (bool)r["ignoreMaintenance"]) sb.Append("<tr><th>Wartungsfenster</th><td>wird ignoriert (sofortige Ausführung)</td></tr>");
         sb.Append("</table>");
 
+        // CC-Writer (mode local): Vorschau dessen, was in die DB geschrieben wird
+        JArray dprev = r["preview"] as JArray;
+        if (dprev != null)
+        {
+            bool kiosk = ((string)r["command"] ?? "").StartsWith("acmp_kiosk_");
+            bool release = (string)r["command"] == "acmp_cc_release";
+            sb.Append("<h2>Was wird ausgeführt</h2><div class=\"runbox\"><div class=\"lbl\">")
+              .Append(Esc((string)r["command"])).Append(kiosk ? " — schreibt direkt in die ACMP-Datenbank (Kiosk)"
+                  : release ? " — gibt Client Commands frei (danach per Kiosk/Job auf Clients ausführbar)"
+                  : " — schreibt direkt in die ACMP-Datenbank (nur Entwürfe, Freigabe danach in der Console)").Append("</div><pre class=\"script\">");
+            foreach (JToken t in dprev) sb.Append(Esc((string)t)).Append("\n");
+            sb.Append("</pre>").Append(PreviewImageHtml(r["previewImage"] as JObject));
+            sb.Append("<p style=\"margin:8px 0 0\"><small>Kennwörter sind maskiert. Ausgeführt wird genau der eingefrorene Inhalt (Roh-Befehl unten); weicht die Quelle bei der Ausführung ab, bricht das Tool ab.</small></p></div>");
+        }
+
         // Prominent: WAS genau ausgefuehrt wird (Skript/Variablen im Klartext, nicht im XML vergraben).
         JArray dvars = r["vars"] as JArray;
         bool isPs = ((string)r["tool"]).IndexOf("powershell", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -1343,11 +1435,14 @@ class AcmpApproval
                   .Append(isScript ? "Skript in Variable „" + Esc(nm) + "“ — läuft als SYSTEM auf dem Client" : "Variable „" + Esc(nm) + "“")
                   .Append("</div><pre class=\"script\">").Append(Esc(val.Length > 0 ? val : "(leer)")).Append("</pre></div>");
             }
+            sb.Append(SnapshotHtml(r));
         }
         else if (r["commandGuid"] != null)
         {
             string an = r["commandName"] != null ? (string)r["commandName"] : (string)r["commandGuid"];
-            sb.Append("<h2>Was wird ausgeführt</h2><div class=\"runbox\"><p style=\"margin:0\">Vordefinierte ACMP-Aktion <b>").Append(Esc(an)).Append("</b> ohne Ad-hoc-Parameter. Ihre internen Schritte sind in ACMP hinterlegt und hier nicht im Klartext einsehbar — geprüft wird, dass genau diese benannte Aktion ausgeführt wird.</p></div>");
+            string snh = SnapshotHtml(r);
+            if (snh.Length > 0) sb.Append("<h2>Was wird ausgeführt</h2>").Append(snh);
+            else sb.Append("<h2>Was wird ausgeführt</h2><div class=\"runbox\"><p style=\"margin:0\">Vordefinierte ACMP-Aktion <b>").Append(Esc(an)).Append("</b> ohne Ad-hoc-Parameter. Ihre internen Schritte konnten nicht gelesen werden — geprüft wird nur, dass genau diese benannte Aktion ausgeführt wird.</p></div>");
         }
 
         // Zwei Spalten: links der Roh-Befehl (formatiert + Highlighting), rechts Schritt fuer Schritt mit Zeilenbezug.
@@ -1364,7 +1459,7 @@ class AcmpApproval
         if (rmode != "publish")
             sb.Append("<div class=\"cmdhdr\">Kommando <b>").Append(Esc((string)r["command"])).Append("</b> <span class=\"vtag\">v").Append(Esc(r["version"] != null ? r["version"].ToString() : "1")).Append("</span></div>");
         if (xmlOk) sb.Append(xHtml);
-        else { sb.Append("<pre>").Append(Esc(rmode == "publish" ? (string)r["raw"] : (string)r["inner"])).Append("</pre>"); }
+        else { sb.Append("<pre>").Append(Esc(rmode == "publish" ? (string)r["raw"] : ShortenData((string)r["inner"]))).Append("</pre>"); }
         sb.Append("</div>");
 
         sb.Append("<div class=\"col\"><h2>Schritt für Schritt</h2>");
@@ -1373,6 +1468,9 @@ class AcmpApproval
             sb.Append("<p style=\"margin:0 0 8px\"><small>Zeilennummern beziehen sich auf den Roh-Befehl links.</small></p><div class=\"expl\">");
             foreach (string[] st in xSteps)
             {
+                // GUIDs in der Erklaerung mit Namen versehen (Zielrechner, Client Command)
+                if (r["commandGuid"] != null && r["commandName"] != null) st[2] = st[2].Replace((string)r["commandGuid"], (string)r["commandGuid"] + " → „" + (string)r["commandName"] + "“");
+                if (r["clientGuid"] != null && r["clientName"] != null) st[2] = st[2].Replace((string)r["clientGuid"], (string)r["clientGuid"] + " → " + (string)r["clientName"]);
                 int d = 0; int.TryParse(st[0], out d);
                 sb.Append("<div class=\"xstep\" style=\"margin-left:").Append(d * 16).Append("px\"><span class=\"lc\">").Append(Esc(st[1])).Append("</span><span>").Append(Esc(st[2])).Append("</span></div>");
             }
@@ -1406,6 +1504,25 @@ class AcmpApproval
                 .Append("<a class=\"btn btn-reject\" href=\"/reject?id=").Append(Esc(id)).Append("&").Append(qs).Append("\">Ablehnen</a></p>");
         sb.Append("<p><a href=\"/approvals?").Append(qs).Append("\">&larr; Offene Freigaben</a> &nbsp;|&nbsp; <a href=\"/history?").Append(qs).Append("\">Verlauf</a></p>");
         return PageNav(sb.ToString(), approver, qs, "approvals");
+    }
+
+    // Inhalt des Client Commands (freigegebene Version, beim Anlegen der Anfrage eingefroren). Leer, wenn kein Snapshot.
+    string SnapshotHtml(JObject r)
+    {
+        JObject sn = r["commandSnapshot"] as JObject;
+        if (sn == null)
+            return r["commandSnapshotError"] != null ? "<p class=\"warn\">Inhalt des Client Commands nicht lesbar: " + Esc((string)r["commandSnapshotError"]) + "</p>" : "";
+        if (sn["released"] != null && !(bool)sn["released"])
+            return "<div class=\"runbox\"><p class=\"warn\" style=\"margin:0\">Dieser Client Command hat keine freigegebene Version – ACMP wird ihn nicht ausführen.</p></div>";
+        var sb = new StringBuilder();
+        sb.Append("<div class=\"runbox\"><div class=\"lbl\">Inhalt des Client Commands „").Append(Esc((string)sn["name"]))
+          .Append("“ – freigegebene Version ").Append(Esc(sn["version"] != null ? sn["version"].ToString() : "?"))
+          .Append(", ").Append(Esc(sn["totalSteps"] != null ? sn["totalSteps"].ToString() : "?")).Append(" Schritte – so läuft er auf dem Client</div><pre class=\"script\">");
+        JArray lines = sn["lines"] as JArray;
+        if (lines != null) foreach (JToken t in lines) sb.Append(Esc((string)t)).Append("\n");
+        sb.Append("</pre><p style=\"margin:8px 0 0\"><small>Kennwörter sind maskiert. Vor der Ausführung prüft der Server, dass der Command seit dieser Anfrage nicht geändert wurde (Prüfsumme ")
+          .Append(Esc(sn["hash"] != null ? ((string)sn["hash"]).Substring(0, Math.Min(12, ((string)sn["hash"]).Length)) : "-")).Append("…); sonst wird nicht ausgeführt.</small></p></div>");
+        return sb.ToString();
     }
 
     string RedirectPage(string url)
@@ -1549,6 +1666,8 @@ class AcmpApproval
         sb.Append("<h2>").Append(step).Append(". Aktivieren</h2>");
         sb.Append("<p>Erst nach einem Neustart des Server-Tasks (Admin, auf dem Host) werden neuer API-Key und ACMP-Mapping wirksam:</p>");
         sb.Append("<pre>schtasks /End /TN \"ACMP-MCP-Server\"\nschtasks /Run /TN \"ACMP-MCP-Server\"</pre>");
+        sb.Append("<p><b>Schreib-Tools</b> (Client Commands als Entwurf, Freigeben, Ordner, Kiosk): Soll die Person sie beantragen dürfen, auf dem Host als Admin zusätzlich ausführen (startet den Dienst selbst neu):</p>");
+        sb.Append("<pre>cd ").Append(Esc(InstallDir())).Append("\n.\\setup-cc-writer.ps1 -AddRequester ").Append(Esc(name)).Append("</pre>");
         sb.Append("<p class=\"actions\"><a class=\"btn btn-ghost\" href=\"/onboarding?").Append(qs).Append("\">&larr; Zurück zum Onboarding</a></p>");
 
         return PageNav(sb.ToString(), approver, qs, "onboarding");
@@ -1701,6 +1820,13 @@ class AcmpApproval
 
     int GetToolApprovalCount(string tool, RiskTier tier)
     {
+        int n = ConfiguredApprovalCount(tool, tier);
+        if (n < 1 && AlwaysGatedTools != null && AlwaysGatedTools.Contains(tool)) return 1;
+        return n;
+    }
+
+    int ConfiguredApprovalCount(string tool, RiskTier tier)
+    {
         if (ToolApprovalCounts != null) { int n; if (ToolApprovalCounts.TryGetValue(tool, out n)) return n; }
         if (NoApprovalTools != null && NoApprovalTools.Contains(tool)) return 0;
         if (tier == RiskTier.Read) return 0;
@@ -1785,7 +1911,11 @@ class AcmpApproval
                 if (desc3.Length > 80) desc3 = desc3.Substring(0, 77) + "...";
                 sb.Append("<tr><td><b>").Append(Esc(tName3)).Append("</b><br><small>").Append(Esc(desc3)).Append("</small></td>");
                 sb.Append("<td class=\"tier-").Append(Esc(tierStr3)).Append("\">").Append(Esc(tierStr3)).Append("</td>");
-                if (BypassAll)
+                if (BypassAll && AlwaysGatedTools != null && AlwaysGatedTools.Contains(tName3))
+                {
+                    sb.Append("<td><small>immer mind. 1 Freigeber (gilt auch bei Bypass)</small></td>");
+                }
+                else if (BypassAll)
                 {
                     sb.Append("<td><span class=\"tier-Destructive\">&Uuml;bersprungen (globaler Schalter)</span></td>");
                 }
@@ -1798,6 +1928,7 @@ class AcmpApproval
                         sb.Append("<a href=\"/settings-approval?tool=").Append(Uri.EscapeDataString(tName3)).Append("&count=").Append(ci).Append("&").Append(qs).Append("\" class=\"cnt").Append(cls3).Append("\">").Append(ci).Append("</a>");
                     }
                     string lbl3 = curCount == 0 ? "kein Gate" : (curCount == 1 ? "1 Freigeber" : "2 Freigeber");
+                    if (AlwaysGatedTools != null && AlwaysGatedTools.Contains(tName3)) lbl3 += " (immer mind. 1)";
                     sb.Append("</div>&nbsp;<small>").Append(lbl3).Append("</small></td>");
                 }
                 sb.Append("</tr>");

@@ -17,3 +17,9 @@ changelog.json
 last-approval-id.txt
 *.bak
 *.crt
+cc-drafts.json
+cc-folders.json
+cc-backups/
+kiosk-backups/
+ctl-installs.json
+ctl/

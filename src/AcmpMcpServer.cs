@@ -28,6 +28,9 @@ static class AcmpMcp
     static string ConnHost, AcmpSrvName, AcmpSrvId;       // fuer Pro-User-Verbindungen
     static AcmpDb DB;
     static AcmpApproval APPROVAL;   // Vier-Augen-Freigabe (serverseitig erzwungen)
+    static AcmpCcWriter CCW;        // Client Commands lesen (Decode) und als Entwurf in die DB schreiben (ccWriter-Section)
+    static AcmpCtl CTL;             // Vorlagen aus der ACMP CTL als Entwurf installieren (nutzt CCW, ctl-Section optional)
+    static AcmpKiosk KIOSK;         // ACMP-Kiosk lesen und Eintraege/Filter schreiben (kioskWriter-Section, Schreib-Login wie ccWriter)
     static JArray DbToolDefs;  // nicht inline initialisieren (laeuft sonst im .cctor vor dem AssemblyResolve-Handler)
     static JArray ApiToolDefs; // datengetriebene API-Tools aus api-tools.json (Public-API-Kommandos ohne Recompile)
     static string ApiKey;
@@ -38,6 +41,11 @@ static class AcmpMcp
     {
         { "acmp_enqueue_client_command", "Write" }, { "acmp_run_powershell", "Destructive" },
         { "acmp_save_containers", "Write" },        { "acmp_delete_containers", "Destructive" },
+        { "acmp_cc_create_draft", "Write" },        { "acmp_cc_update_draft", "Write" },
+        { "acmp_cc_restore_draft", "Write" },       { "acmp_cc_add_file", "Write" },
+        { "acmp_cc_remove_file", "Write" },         { "acmp_lib_install", "Write" },
+        { "acmp_cc_move", "Write" },                { "acmp_cc_add_folder", "Write" },
+        { "acmp_cc_update_folder", "Write" },       { "acmp_cc_release", "Write" },
         { "acmp_create_container", "Write" },       { "acmp_lend_asset", "Write" },
         { "acmp_return_asset", "Write" },           { "acmp_create_ticket", "Write" },
         { "acmp_update_ticket", "Write" },          { "acmp_close_ticket", "Write" },
@@ -48,9 +56,20 @@ static class AcmpMcp
         { "acmp_create_department", "Write" },      { "acmp_update_department", "Write" },
         { "acmp_create_asset", "Write" },           { "acmp_update_asset", "Write" },
         { "acmp_call", "Write" },
+        { "acmp_kiosk_add_item", "Write" },         { "acmp_kiosk_set_filter", "Write" },
+        { "acmp_kiosk_remove_item", "Write" },      { "acmp_kiosk_restore", "Write" },
+        { "acmp_kiosk_add_image", "Write" },        { "acmp_kiosk_set_image", "Write" },
+        { "acmp_kiosk_remove_image", "Write" },     { "acmp_kiosk_add_group", "Write" },
+        { "acmp_kiosk_update_items", "Write" },     { "acmp_kiosk_update_group", "Write" },
     };
     static string TicketCreatedStateId = "{0E9A3C65-5EA3-42BE-80E9-B71A2C4F01C2}"; // Ticketstatus "Erstellt" fuer neue Tickets (Config: helpdesk.createdStateId)
-    static string PsCommandId;            // ClientCommandId der Vorlagen-Aktion fuer acmp_run_powershell (aus Config)
+    static bool IsKioskWriteTool(string name)
+    {
+        return name == "acmp_kiosk_add_item" || name == "acmp_kiosk_set_filter" || name == "acmp_kiosk_remove_item" || name == "acmp_kiosk_restore" ||
+               name == "acmp_kiosk_add_image" || name == "acmp_kiosk_set_image" || name == "acmp_kiosk_remove_image" || name == "acmp_kiosk_add_group" ||
+               name == "acmp_kiosk_update_items" || name == "acmp_kiosk_update_group";
+    }
+    static string PsCommandId;              // ClientCommandId der Vorlagen-Aktion fuer acmp_run_powershell (aus Config)
     static string PsVariableName = "SCRIPT"; // Name der Skript-Variable in dieser Vorlage
     static string PublicUrl;                // erreichbare Basis-URL fuer Client-Callbacks (aus approval.publicUrl)
     // Offene Registry-Leseauftraege (acmp_read_registry): Token -> Auftrag. Der Client meldet das Ergebnis per HTTP an /regresult zurueck.
@@ -153,6 +172,56 @@ static class AcmpMcp
         if (dbCs != null && (dbCs.Length == 0 || dbCs.Contains("HIER_"))) dbCs = null;   // Platzhalter aus config.example.json
         DB = new AcmpDb(dbCs);
         Log("DB-Report-Tools: " + (DB.Enabled ? "aktiv" : "aus (keine db.connectionString gesetzt)"));
+        CCW = new AcmpCcWriter(dbCs, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!CCW.ConfigOk) Log("CC-Schreiben: aus (" + CCW.DisabledReason + ")");
+        else
+        {
+            try
+            {
+                JObject pf = CCW.Preflight(true);
+                Log("CC-Schreiben: " + ((bool)pf["ok"] ? "AKTIV (nur Entwuerfe, " + (CCW.ApprovalGate ? "ueber Vier-Augen-Freigabe" : "OHNE Freigabe - ccWriter.approvalGate=false") + ")" : "GESPERRT (Kompatibilitaetspruefung, Details: acmp_cc_writer_status)"));
+                string fNote = "", eNote = "";
+                foreach (JObject ck in (JArray)pf["checks"])
+                {
+                    if ((string)ck["check"] == "Ordner anlegen" && (string)ck["result"] != "ok") fNote = (string)ck["detail"];
+                    if ((string)ck["check"] == "Ordner aendern" && (string)ck["result"] != "ok") eNote = (string)ck["detail"];
+                }
+                Log("CC-Ordner: verschieben (acmp_cc_move) " + ((bool)pf["ok"] ? "AKTIV" : "GESPERRT") + (CCW.MoveScope.Count > 0 ? " (nur in " + string.Join(", ", new List<string>(CCW.MoveScope).ToArray()) + ")" : " (ganzer Baum)") +
+                    ", anlegen (acmp_cc_add_folder) " + (pf["folderTool"] != null && (bool)pf["folderTool"] ? "AKTIV" : "GESPERRT - " + (fNote.Length > 0 ? fNote : "Kompatibilitaetspruefung")) +
+                    ", aendern (acmp_cc_update_folder) " + (pf["folderEditTool"] != null && (bool)pf["folderEditTool"] ? "AKTIV" : "GESPERRT - " + (eNote.Length > 0 ? eNote : "Kompatibilitaetspruefung")));
+                string rNote = "";
+                foreach (JObject ck in (JArray)pf["checks"]) if ((string)ck["check"] == "Freigeben" && (string)ck["result"] != "ok") rNote = (string)ck["detail"];
+                Log("CC-Freigabe (acmp_cc_release): " + (pf["releaseTool"] != null && (bool)pf["releaseTool"]
+                    ? (CCW.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll)" : "GESPERRT - ccWriter.approvalGate=false (Freigeben nur mit Gate)")
+                    : "GESPERRT - " + (rNote.Length > 0 ? rNote : "Kompatibilitaetspruefung")));
+            }
+            catch (Exception ex) { Log("CC-Schreiben: Kompatibilitaetspruefung fehlgeschlagen: " + ex.Message); }
+        }
+        CTL = new AcmpCtl(CCW, dbCs, cfg["ctl"] as JObject, cfgDir, new Action<string>(Log));
+        if (DB.Enabled) Log("ACMP CTL: Vorlagen-Quellen " + CTL.SourceList);
+        KIOSK = new AcmpKiosk(dbCs, cfg["kioskWriter"] as JObject, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!KIOSK.ConfigOk) Log("Kiosk-Schreiben: aus (" + KIOSK.DisabledReason + ")");
+        else
+        {
+            try
+            {
+                JObject kpf = KIOSK.Preflight(true);
+                Log("Kiosk-Schreiben: " + ((bool)kpf["ok"] ? "AKTIV (Ordner " + string.Join(", ", new List<string>(KIOSK.AllowedGroups).ToArray()) + ", " + (KIOSK.ApprovalGate ? "ueber Vier-Augen-Freigabe" : "OHNE Freigabe") + ")" : "GESPERRT (Vorpruefung, Details: acmp_kiosk_tree status=true)"));
+                bool imgOn = kpf["imageTools"] != null && (bool)kpf["imageTools"];
+                var imgNotes = new List<string>();
+                foreach (JObject ck in (JArray)kpf["checks"]) if (((string)ck["check"]).StartsWith("Bilder") && (string)ck["result"] != "ok") imgNotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
+                Log("Kiosk-Bilder: " + (imgOn ? "AKTIV (Quellen " + KIOSK.ImageSourceRootsText + ")" : "GESPERRT - " + string.Join(" | ", imgNotes.ToArray())));
+                bool updOn = kpf["updateTool"] != null && (bool)kpf["updateTool"];
+                string updNote = "";
+                foreach (JObject ck in (JArray)kpf["checks"]) if ((string)ck["check"] == "Rechte Aendern") updNote = (string)ck["detail"];
+                Log("Kiosk-Aendern (acmp_kiosk_update_items): " + (updOn ? "AKTIV" : "GESPERRT - " + (updNote.Length > 0 ? updNote : "Vorpruefung nicht bestanden")));
+                bool grpOn = kpf["groupTool"] != null && (bool)kpf["groupTool"];
+                string grpNote = "";
+                foreach (JObject ck in (JArray)kpf["checks"]) if ((string)ck["check"] == "Rechte Ordner") grpNote = (string)ck["detail"];
+                Log("Kiosk-Ordner aendern (acmp_kiosk_update_group): " + (grpOn ? "AKTIV" : "GESPERRT - " + (grpNote.Length > 0 ? grpNote : "Vorpruefung nicht bestanden")));
+            }
+            catch (Exception ex) { Log("Kiosk-Schreiben: Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
         Log("acmp_run_powershell: " + (PsCommandId != null ? "aktiv (Vorlage " + PsCommandId + ", Variable " + PsVariableName + ")" : "aus (runPowershell.clientCommandId nicht gesetzt)"));
         DbToolDefs = new JArray();
         if (DB.Enabled)
@@ -199,6 +268,17 @@ static class AcmpMcp
             try
             {
                 string mode = (string)req["mode"];
+                // Wurde der Client Command seit der Anfrage geaendert (neue freigegebene Version)? Dann nicht ausfuehren.
+                JObject snap = req["commandSnapshot"] as JObject;
+                if (snap != null && snap["hash"] != null && ((string)snap["hash"]).Length > 0 && CCW != null)
+                {
+                    JObject now = CCW.ReleasedSnapshot((string)snap["scriptId"]);
+                    if (now == null || (string)now["hash"] != (string)snap["hash"])
+                        throw new Exception("Client Command '" + (string)snap["name"] + "' wurde seit der Anfrage geaendert (freigegebene Version " + snap["version"] +
+                            " -> " + (now != null && now["version"] != null ? now["version"].ToString() : "keine") + "). Nicht ausgefuehrt - bitte neu beantragen.");
+                }
+                if (mode == "local")   // CC-Writer: eingefrorene Argumente, Antragsteller aus der Anfrage
+                    return RunCcTool((string)req["command"], JObject.Parse((string)req["inner"]), (string)req["requester"]).ToString(Formatting.Indented);
                 if (mode == "publish") return CONN.Publish((string)req["raw"]);
                 int v = req["version"] != null ? (int)req["version"] : 1;
                 return CONN.Call((string)req["command"], v, (string)req["inner"]);
@@ -208,10 +288,12 @@ static class AcmpMcp
         APPROVAL.ResolveClientName = new Func<string, string>(ResolveClientName);
         APPROVAL.ResolveClientUser = new Func<string, string>(ResolveClientUser);
         APPROVAL.ResolveCommandName = new Func<string, string>(ResolveCommandName);
+        APPROVAL.ResolveCommandSnapshot = delegate(string g) { return CCW != null ? CCW.ReleasedSnapshot(g) : null; };
         APPROVAL.CfgPath = Path.GetFullPath(cfgPath);
         APPROVAL.NoApprovalTools = NoApprovalTools;
         APPROVAL.GatedToolTiers = GatedToolTiers;
         APPROVAL.BypassAll = apprCfg != null && apprCfg["bypassAll"] != null && (bool)apprCfg["bypassAll"];
+        APPROVAL.AlwaysGatedTools.Add("acmp_cc_release");   // Freigeben ersetzt den Klick in der Console: nie ohne Zustimmung
         APPROVAL.GetAllTools = delegate() { return (JArray)ToolsList()["tools"]; };
         var toolCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         JObject tcCfg = apprCfg != null ? apprCfg["toolApprovalCounts"] as JObject : null;
@@ -413,6 +495,11 @@ static class AcmpMcp
                     "- Container: acmp_create_container/acmp_save_containers/acmp_delete_containers\n" +
                     "- Lizenzen/Einstellungen: acmp_get_licenses / acmp_get_app_settings / acmp_get_master_data_settings / acmp_get_custom_field_list\n" +
                     "- Schwachstellen/Updates/Inventar (DB-Reports): acmp_outdated_software / acmp_missing_updates / acmp_software_search\n" +
+                    "- Schritte eines Client Commands lesen: acmp_cc_decode ; welche Schrittklassen/Felder es gibt: acmp_cc_catalog ; neuen Client Command als Entwurf anlegen/aendern: acmp_cc_create_draft / acmp_cc_update_draft (falls freigeschaltet) ; vom MCP angelegte Entwuerfe freigeben, auch mehrere in einem Auftrag: acmp_cc_release (erst dryRun=true, Vorschau dem Menschen zeigen; laeuft immer ueber die Freigabe-Seite)\n" +
+                    "- Client-Command-Ordner: Baum mit GUIDs und Anzahl acmp_cc_folders (commands=true listet die Commands) ; Commands in andere Ordner verschieben, auch viele in einem Auftrag, acmp_cc_move (zurueck mit undo) ; neue Ordner anlegen, auch mehrere samt Unterordnern in einem Auftrag, acmp_cc_add_folder ; Ordner umbenennen/verschieben acmp_cc_update_folder (zurueck mit undo) (alle erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
+                    "- Vorlage aus der ACMP CTL (Community Template Library) als Entwurf installieren: acmp_lib_install (erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
+                    "- ACMP-Kiosk: Ordner, Eintraege und Sichtbarkeitsfilter lesen acmp_kiosk_tree ; Ordner anlegen acmp_kiosk_add_group ; Ordner umbenennen (DE/EN), Ordner-Icon/-Filter aendern acmp_kiosk_update_group ; Eintrag anlegen acmp_kiosk_add_item ; Eintraege verschieben/umbenennen/Beschreibung/Icon/Filter aendern, auch viele in einem Auftrag, acmp_kiosk_update_items ; Filter setzen/entfernen acmp_kiosk_set_filter ; Eintrag entfernen acmp_kiosk_remove_item ; zurueck acmp_kiosk_restore (add_group/update_group/add_item/update_items/set_filter erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
+                    "- Kiosk-Icons: Auswahl mit Bildern acmp_kiosk_images preview=3 (where=both sucht auch Dateien, die noch nicht hochgeladen sind) und den Menschen waehlen lassen ; neues Bild hochladen acmp_kiosk_add_image (Datei vorher in den freigegebenen UNC-Ordner legen) ; Icon eines Eintrags/Ordners tauschen acmp_kiosk_set_image ; vom MCP hochgeladenes, unbenutztes Bild entfernen acmp_kiosk_remove_image\n" +
                     "Tool-Name unbekannt: tools/list zeigt alle Tools, acmp_describe { command } zeigt Details. Es ist fast immer besser, ein vorhandenes Tool zu nutzen, als eine Aufgabe ohne Tool zu loesen.";
                 return JsonRpcResult(idTok, r);
             }
@@ -716,7 +803,7 @@ static class AcmpMcp
             new JObject(), null));
 
         tools.Add(Tool("acmp_helpdesk_settings",
-            "Helpdesk-Konfiguration lesen: Kategorien, Status, Prioritaeten, TextModule. Kommando GetHelpDeskSettings v2.",
+            "Helpdesk-Konfiguration lesen: Kategorien, Status (Namen zur StateId aus acmp_get_tickets), Prioritaeten, Loesungen, Auswirkungen, TextModule. Kommando GetHelpdeskSettings v2.",
             new JObject(), null));
 
         tools.Add(Tool("acmp_get_assignees",
@@ -914,7 +1001,417 @@ static class AcmpMcp
             tools.Add(Tool((string)d["name"], desc + " [API-Tool: " + (string)d["command"] + " v" + (d["version"] != null ? d["version"].ToString() : "1") + ", " + tierStr + "]", props, req.ToArray()));
         }
 
+        // Client Commands: lesen (immer, wenn DB aktiv) und als Entwurf schreiben (nur mit ccWriter-Section)
+        if (DB != null && DB.Enabled)
+        {
+            var dp = new JObject();
+            dp["command"] = Prop("string", "Name oder ScriptId-GUID des Client Commands.");
+            dp["version"] = Prop("integer", "Optional: ScriptVersion (Standard: neueste).");
+            dp["fullXml"] = Prop("boolean", "Optional: zusaetzlich das komplette XML jedes Schritts ausgeben.");
+            tools.Add(Tool("acmp_cc_decode",
+                "Zeigt die Schritte eines Client Commands lesbar an (entpackt SYS_SCRIPTS.CLIENTSCRIPT): Projektvariablen, Schrittbaum mit Klasse, Beschreibung und Feldern (Standardwerte weggelassen). Die Ausgabe von 'steps' ist direkt als Eingabe fuer acmp_cc_create_draft verwendbar. (read-only DB)",
+                dp, new[] { "command" }));
+            var kp = new JObject();
+            kp["className"] = Prop("string", "Optional: nur Schrittklassen, deren Name diesen Text enthaelt (z.B. 'PowerShell', 'TActionIf'); dann mit Feldstatistik, Beispielwerten und Beispiel-Beschreibungen.");
+            kp["examples"] = Prop("integer", "Optional: Beispiele je Klasse (Standard 1 in der Uebersicht, 5 mit className; max 20).");
+            tools.Add(Tool("acmp_cc_catalog",
+                "Katalog aller Schrittklassen, die in vorhandenen Client Commands vorkommen (neueste Version je Command, Client- und Console-Skript): Haeufigkeit, Feldnamen, Beispiel-Beschreibungen. Ohne className kompakte Uebersicht aller Klassen. Werte gekuerzt, Kennwort-Felder maskiert, Skriptzeilen nur gezaehlt. (read-only DB)",
+                kp, null));
+            var sp = new JObject();
+            sp["refresh"] = Prop("boolean", "Optional: Kompatibilitaetspruefung jetzt neu ausfuehren (sonst Ergebnis der letzten Pruefung, hoechstens 60 Minuten alt).");
+            var fp = new JObject();
+            fp["folder"] = Prop("string", "Optional: nur diesen Ordner samt Unterordnern zeigen (GUID, Name oder Pfad).");
+            fp["commands"] = Prop("boolean", "Optional: je Ordner auch die Commands auflisten (Name | ScriptId | Version und Status).");
+            tools.Add(Tool("acmp_cc_folders",
+                "Zeigt den Client-Command-Ordnerbaum der Console: Pfad, GUID, Anzahl Commands (neueste Version je Command, auch Entwuerfe), Unterordner, Rechte-Eintraege; mit commands=true auch die Commands je Ordner. Grundlage fuer acmp_cc_move, acmp_cc_add_folder und acmp_cc_update_folder (aagon=true: Aagon-Standardordner, nicht aenderbar). (read-only DB)",
+                fp, null));
+            tools.Add(Tool("acmp_cc_writer_status",
+                "Status des CC-Writers (Client Commands als Entwurf direkt in die ACMP-DB schreiben): eingeschaltet?, Freigabe-Gate, erlaubte Antragsteller/Ordner/Dateiquellen und das Ergebnis der Kompatibilitaetspruefung (ACMP-Version, Tabellen/Spalten, Trigger, Rechte des Schreib-Logins, Vorlage, Ordner, File Repository, Format-Rundlauf an echten Commands). Geschrieben wird nur, wenn alle sperrenden Pruefungen bestanden sind. (read-only)",
+                sp, null));
+            var li = new JObject();
+            li["id"] = Prop("string", "Vorlagen-ID aus der ACMP CTL, optional mit Version, z.B. teamviewer-id-auslesen oder teamviewer-id-auslesen@1.0.0. Geladen aus ctl.sources (lokaler Ordner <quelle>\\templates\\<id>\\template.json oder https-Basis).");
+            li["version"] = Prop("string", "Optional: erwartete Version; weicht die Vorlage ab, wird abgebrochen.");
+            li["template"] = Prop("object", "Optional statt Laden per id: die komplette template.json (z.B. aus einer lokalen Kopie des Repos). Wird genauso geprueft.");
+            li["folder"] = Prop("string", "Client-Command-Ordner fuer den Entwurf: GUID oder eindeutiger Name.");
+            li["name"] = Prop("string", "Optional: Name des Commands (Standard: name aus der Vorlage).");
+            li["parameters"] = Prop("object", "Werte fuer die Parameter der Vorlage, z.B. {\"STARTSEITE\":\"https://intranet\"}. Fehlende Werte nehmen den default der Vorlage; Pflichtparameter ohne Wert brechen ab.");
+            li["globalAccountId"] = Prop("string", "Nur wenn die Vorlage requires.globalAccount hat: GUID des globalen ACMP-Accounts in dieser Installation.");
+            li["dryRun"] = Prop("boolean", "true = nur pruefen und zeigen, was angelegt wuerde (Schritte nach dem Einsetzen, aufgeloeste Felder), nichts schreiben. Geht auch ohne eingeschalteten CC-Writer. Vor jeder echten Installation empfohlen.");
+            li["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_lib_install",
+                "Installiert eine Vorlage aus der ACMP CTL (Community Template Library) als Client-Command-ENTWURF (State 1, nicht freigegeben): laedt template.json, prueft Schema, Status (nicht 'beispiel'), Kennwortfelder, setzt Parameter ({{NAME}}), globalen Account ({{GLOBAL_ACCOUNT_ID}}) und individuelle Felder ({{CF:<Feld>:<Eigenschaft>}}, Aufloesung ueber den Feldnamen in dieser Installation) ein und legt den Entwurf wie acmp_cc_create_draft an. " +
+                (CCW != null && CCW.ConfigOk ? (CCW.ApprovalGate ? "Ohne dryRun entsteht eine Freigabe-Anfrage (Vier-Augen), die Vorschau zeigt die aufgeloesten Schritte. " : "") : "CC-Writer ist ausgeschaltet: nur dryRun moeglich. ") +
+                "Dateien der Vorlage (files: url = Download beim Hersteller, nur https; path = Datei im Vorlagen-Ordner) laedt der Server schon beim dryRun bzw. der Freigabe-Anfrage, prueft den SHA-256 aus der Vorlage und haengt sie nach dem Anlegen an den Entwurf (Ordner private, wie acmp_cc_add_file); weicht eine Pruefsumme ab, wird nichts angelegt. " +
+                "Freigeben des Commands in der ACMP-Console.",
+                li, new[] { "folder" }));
+        }
+        if (DB != null && DB.Enabled && KIOSK != null)
+        {
+            string kGate = KIOSK.ConfigOk ? (KIOSK.ApprovalGate ? " Ohne dryRun entsteht eine Freigabe-Anfrage (Vier-Augen) mit Vorschau; geschrieben wird erst nach Zustimmung." : "") : " Kiosk-Writer ist ausgeschaltet: nur dryRun moeglich.";
+            var kt = new JObject();
+            kt["group"] = Prop("string", "Optional: nur diesen Kiosk-Ordner zeigen (GUID oder Name).");
+            kt["details"] = Prop("boolean", "Optional: zusaetzlich Beschreibung, Icon und den gespeicherten Filterausdruck zeigen.");
+            kt["status"] = Prop("boolean", "Optional: Vorpruefung des Kiosk-Writers neu ausfuehren und alle Einzelpruefungen zeigen.");
+            tools.Add(Tool("acmp_kiosk_tree",
+                "Zeigt den ACMP-Kiosk: Ordner und Eintraege mit Namen, verknuepftem Client Command bzw. Managed-Software-Paket (inkl. freigegebener Version), Sichtbarkeitsfilter im Klartext und Warnungen (z.B. Eintrag ohne freigegebene Version). Dazu den Status des Kiosk-Writers. (read-only DB)",
+                kt, null));
+            var ka = new JObject();
+            ka["group"] = Prop("string", "Kiosk-Ordner: GUID oder Name (acmp_kiosk_tree). Schreiben nur in freigegebenen Ordnern (kioskWriter.allowedGroupIds).");
+            ka["command"] = Prop("string", "Client Command: Name oder ScriptId-GUID. Braucht eine freigegebene Version.");
+            ka["nameDe"] = Prop("string", "Optional: Anzeigename deutsch (max. 50 Zeichen, Standard: Name des Commands).");
+            ka["nameEn"] = Prop("string", "Optional: Anzeigename englisch (Standard: nameDe).");
+            ka["descriptionDe"] = Prop("string", "Optional: Beschreibung deutsch (Standard: Beschreibung der freigegebenen Version).");
+            ka["descriptionEn"] = Prop("string", "Optional: Beschreibung englisch (Standard: descriptionDe).");
+            ka["image"] = Prop("string", "Optional: Icon aus SYS_CustomImages, GUID oder Name (Standard: Kiosk-Standardicon fuer Client Commands).");
+            ka["filter"] = Prop("object", "Optional: eigener Sichtbarkeitsfilter des Eintrags (ohne: sichtbar wie der Ordner). " + AcmpKiosk.FilterHelp);
+            ka["dryRun"] = Prop("boolean", "true = nur aufloesen, pruefen und Vorschau zeigen (AD-Gruppen -> SID, Container -> GUID, Ausdruck), nichts schreiben.");
+            ka["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_add_item",
+                "Legt einen Kiosk-Eintrag fuer einen freigegebenen Client Command an (wie 'Eintrag hinzufuegen' in der Console), optional mit eigenem Sichtbarkeitsfilter. Schreibt SYS_Kiosk_Items, Name/Beschreibung (DE/EN) und Filter in einer Transaktion." + kGate,
+                ka, new[] { "group", "command" }));
+            var kg = new JObject();
+            kg["nameDe"] = Prop("string", "Name des neuen Kiosk-Ordners, deutsch (max. 50 Zeichen, eindeutig unter den Ordnern).");
+            kg["nameEn"] = Prop("string", "Optional: Name englisch (Standard: nameDe).");
+            kg["image"] = Prop("string", "Optional: Icon, GUID oder Name aus acmp_kiosk_images (Standard: ACMP-Ordnersymbol \"Folder\"). Zur Auswahl vorher acmp_kiosk_images mit preview=3.");
+            kg["filter"] = Prop("object", "Optional, empfohlen: Sichtbarkeitsfilter des Ordners (ohne: fuer ALLE Benutzer sichtbar). " + AcmpKiosk.FilterHelp);
+            kg["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (mit Icon als Bild), nichts schreiben.");
+            kg["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_add_group",
+                "Legt einen neuen Kiosk-Ordner auf oberster Ebene an (wie 'Ordner hinzufuegen' in der Console): SYS_Kiosk_Groups, Name (DE/EN), Icon und optional Sichtbarkeitsfilter in einer Transaktion. Vom MCP angelegte Ordner darf der MCP danach beschreiben (Eintraege, Filter, Icon). Loeschen nur in der ACMP-Console." + kGate,
+                kg, new[] { "nameDe" }));
+            var kgu = new JObject();
+            kgu["group"] = Prop("string", "Kiosk-Ordner: GUID oder jetziger Name (acmp_kiosk_tree). Nur Ordner aus kioskWriter.allowedGroupIds und vom MCP angelegte.");
+            kgu["nameDe"] = Prop("string", "Optional: neuer Name deutsch (max. 50 Zeichen, eindeutig unter den Ordnern).");
+            kgu["nameEn"] = Prop("string", "Optional: neuer Name englisch (max. 50 Zeichen). Ohne Angabe folgt er dem deutschen, wenn er bisher gleich oder leer war, sonst bleibt er.");
+            kgu["image"] = Prop("string", "Optional: neues Icon, GUID oder Name aus acmp_kiosk_images (Bildvorschau dort mit preview=3).");
+            kgu["filter"] = Prop("object", "Optional: neuer Sichtbarkeitsfilter des Ordners (ersetzt den bisherigen). " + AcmpKiosk.FilterHelp);
+            kgu["clearFilter"] = Prop("boolean", "Optional: true = Filter des Ordners entfernen (danach fuer ALLE sichtbar). Statt filter.");
+            kgu["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (bisheriger und neuer Name DE/EN, Icon, Filter), nichts schreiben. Vor jeder Anfrage empfohlen.");
+            kgu["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_update_group",
+                "Aendert einen Kiosk-Ordner in EINEM Auftrag (eine Freigabe, eine Transaktion): umbenennen (DE/EN), Icon, Sichtbarkeitsfilter. Nur Ordner aus kioskWriter.allowedGroupIds und vom MCP angelegte; Ordner-Id und Eintraege bleiben gleich. Sichert den Ordner vorher (zurueck mit acmp_kiosk_restore). Loeschen und Verschieben nur in der ACMP-Console." + kGate,
+                kgu, new[] { "group" }));
+            var kf = new JObject();
+            kf["target"] = Prop("string", "Kiosk-Eintrag oder Kiosk-Ordner: GUID oder Name.");
+            kf["filter"] = Prop("object", "Neuer Sichtbarkeitsfilter (ersetzt den bisherigen). " + AcmpKiosk.FilterHelp);
+            kf["clear"] = Prop("boolean", "true = Filter entfernen (Eintrag sichtbar wie der Ordner, Ordner fuer alle sichtbar). Statt filter.");
+            kf["dryRun"] = Prop("boolean", "true = nur aufloesen, pruefen und Vorschau zeigen, nichts schreiben.");
+            kf["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_set_filter",
+                "Setzt oder entfernt den Sichtbarkeitsfilter eines Kiosk-Eintrags oder -Ordners (Ausdruck und XML wie die Console). Sichert den bisherigen Filter vorher (zurueck mit acmp_kiosk_restore)." + kGate,
+                kf, new[] { "target" }));
+            var ku = new JObject();
+            JObject kuc = Prop("array", AcmpKiosk.UpdateHelp + AcmpKiosk.FilterHelp);
+            kuc["items"] = new JObject(new JProperty("type", "object"));
+            ku["changes"] = kuc;
+            ku["dryRun"] = Prop("boolean", "true = nur aufloesen, pruefen und Vorschau zeigen (auch, wie sich die Sichtbarkeit durch das Verschieben aendert), nichts schreiben. Vor jeder Anfrage empfohlen.");
+            ku["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_update_items",
+                "Aendert einen oder mehrere Kiosk-Eintraege in EINEM Auftrag (eine Freigabe, eine Transaktion): in einen anderen Kiosk-Ordner verschieben, umbenennen (DE/EN), Beschreibung, Icon, eigener Sichtbarkeitsfilter. Fuer Client Commands UND Managed Software; Eintrags-Id und verknuepfter Inhalt bleiben gleich. Quelle und Ziel nur in freigegebenen bzw. vom MCP angelegten Ordnern. Die Vorschau sagt, wenn ein Eintrag durch das Verschieben fuer andere Benutzer sichtbar wird. Sichert alle beteiligten Eintraege vorher (zurueck mit acmp_kiosk_restore)." + kGate,
+                ku, new[] { "changes" }));
+            var ki = new JObject();
+            ki["search"] = Prop("string", "Optional: Teil des Bildnamens.");
+            ki["image"] = Prop("string", "Optional: genau ein Bild (GUID oder Name).");
+            ki["folder"] = Prop("string", "Optional: Bildordner: Pictures (eigene Uploads), ACMP Kiosk, ACMP, Managed Software oder GUID.");
+            ki["unused"] = Prop("boolean", "Optional: nur Bilder, die nirgends benutzt werden.");
+            ki["top"] = Prop("integer", "Optional: hoechstens so viele (Standard 50, max. 200), neueste zuerst.");
+            ki["where"] = Prop("string", "Optional: acmp (Standard, Bilder in ACMP), files (Bilddateien in den Bildquellen " + (KIOSK.ImageSourceRootsText.Length > 0 ? KIOSK.ImageSourceRootsText : "kioskWriter.imageSourceRoots") + ", noch nicht hochgeladen) oder both.");
+            ki["preview"] = Prop("integer", "Optional: die ersten N Treffer (1-" + AcmpKiosk.MaxPreviews + ", empfohlen 3) als Bild mitliefern, nummeriert als Auswahl. Fuer eine Icon-Auswahl im Chat immer setzen und den Anwender waehlen lassen.");
+            tools.Add(Tool("acmp_kiosk_images",
+                "Sucht Bilder (Icons) in ACMP (SYS_CustomImages): Name, Ordner, Typ, Pixelmass, Groesse, wer sie benutzt (Kiosk-Eintraege/-Ordner, Container, Kiosk-Aussehen), ob vom MCP hochgeladen; mit where=files|both auch Bilddateien in den Bildquellen. Mit preview=N kommen die ersten N Treffer als Bilder (PNG-Vorschau, SVG ohne Vorschau) zur Auswahl. Fuer image= in acmp_kiosk_add_item / acmp_kiosk_set_image / acmp_kiosk_add_group bzw. source= in acmp_kiosk_add_image. (read-only)",
+                ki, null));
+            var kn = new JObject();
+            kn["source"] = Prop("string", "UNC-Pfad der Bilddatei (PNG, JPG, ICO oder SVG) unterhalb von kioskWriter.imageSourceRoots" + (KIOSK.ImageSourceRootsText.Length > 0 ? " (" + KIOSK.ImageSourceRootsText + ")" : "") + ". Datei vorher dort ablegen; der Dienst liest sie mit dem Computerkonto des ACMP-Servers.");
+            kn["name"] = Prop("string", "Optional: Bildname in ACMP (max. 100 Zeichen, eindeutig; Standard: Dateiname ohne Endung).");
+            kn["description"] = Prop("string", "Optional: Beschreibung (max. 250 Zeichen).");
+            kn["dryRun"] = Prop("boolean", "true = nur pruefen (Typ, Pixelmass, SVG-Pruefung, Doppelte) und Vorschau zeigen, nichts schreiben.");
+            kn["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_add_image",
+                "Laedt ein Bild als Icon in ACMP hoch (wie 'Bild hinzufuegen' in der Console): Datei ins File Repository (Images), Zeile in SYS_CustomImages, Ordner 'Pictures'. Bytes und SHA-256 werden in der Freigabe eingefroren; dryRun, Anfrage und Freigabe-Seite zeigen das Bild. SVG nur ohne Skripte und externe Verweise. Passende Dateien findet acmp_kiosk_images where=files preview=3." + kGate,
+                kn, new[] { "source" }));
+            var kc = new JObject();
+            kc["target"] = Prop("string", "Kiosk-Eintrag oder Kiosk-Ordner: GUID oder Name.");
+            kc["image"] = Prop("string", "Neues Icon: GUID oder Name aus acmp_kiosk_images.");
+            kc["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+            kc["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_kiosk_set_image",
+                "Setzt das Icon eines Kiosk-Eintrags oder -Ordners (nur in freigegebenen Kiosk-Ordnern). dryRun und Anfrage zeigen bisheriges und neues Icon als Bild. Das bisherige Icon steht in der Antwort (zurueck: dasselbe Tool mit dem alten Bild)." + kGate,
+                kc, new[] { "target", "image" }));
+            if (KIOSK.ConfigOk)
+            {
+                var kr = new JObject();
+                kr["item"] = Prop("string", "Kiosk-Eintrag: GUID oder Name.");
+                kr["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+                tools.Add(Tool("acmp_kiosk_remove_item",
+                    "Entfernt einen Kiosk-Eintrag (der Client Command bleibt unveraendert). Sichert Eintrag, Namen, Beschreibung und Filter vorher; ACMP raeumt Namen und Filter per Trigger ab." + kGate,
+                    kr, new[] { "item" }));
+                var ks = new JObject();
+                ks["backup"] = Prop("string", "Dateiname der Sicherung aus der Antwort von acmp_kiosk_set_filter, acmp_kiosk_remove_item, acmp_kiosk_remove_image, acmp_kiosk_update_items oder acmp_kiosk_update_group.");
+                ks["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+                tools.Add(Tool("acmp_kiosk_restore",
+                    "Stellt einen entfernten Kiosk-Eintrag, einen ersetzten Filter, ein entferntes Bild, den Stand vor acmp_kiosk_update_items (alle Eintraege des Auftrags: Ordner, Namen, Beschreibung, Icon, Filter) oder den Stand eines Ordners vor acmp_kiosk_update_group (Name, Icon, Filter) aus einer Sicherung wieder her." + kGate,
+                    ks, new[] { "backup" }));
+                var kx = new JObject();
+                kx["image"] = Prop("string", "Bild: GUID oder Name (acmp_kiosk_images).");
+                kx["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+                kx["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+                tools.Add(Tool("acmp_kiosk_remove_image",
+                    "Entfernt ein Bild (Zeile in SYS_CustomImages und Datei), aber nur, wenn der MCP es hochgeladen hat und es nirgends benutzt wird. Zeile und Datei werden vorher gesichert (zurueck mit acmp_kiosk_restore)." + kGate,
+                    kx, new[] { "image" }));
+            }
+        }
+        if (CCW != null && CCW.WriteEnabled)
+        {
+            string gateNote = CCW.ApprovalGate ? " Laeuft ueber die Vier-Augen-Freigabe: zuerst entsteht eine Freigabe-Anfrage mit Vorschau, geschrieben wird erst nach Zustimmung." : "";
+            const string stepsHelp = "Schrittbaum als JSON-Array: [{\"class\":\"TSetProjectVar\",\"description\":\"Projektvariable setzen TEST zu \\\"Hallo\\\"\",\"fields\":{\"Variable_name\":\"TEST\",\"Content_list\":\"\",\"Content_option\":\"SingleLine\",\"Content\":\"Hallo\"}}, {\"class\":\"TActionIf\",\"description\":\"If ..\",\"fields\":{...},\"children\":[...]}]. Felder je Klasse am besten aus acmp_cc_decode eines vorhandenen Commands uebernehmen. 'description' ist optional: fehlt sie, wird die Standardbeschreibung der deutschen Console erzeugt (z.B. 'Befehl ausfuehren', 'Projektvariable setzen X zu \"Y\"', 'Case (1)'). Alternativ {\"class\":..., \"xml\":\"<TKlasse>...</TKlasse>\"}.";
+            var cp = new JObject();
+            cp["name"] = Prop("string", "Name des neuen Client Commands.");
+            cp["folder"] = Prop("string", "Ordner: GUID oder eindeutiger Name aus dem Client-Command-Baum.");
+            cp["steps"] = Prop("array", stepsHelp);
+            cp["variables"] = Prop("array", "Optional: Projektvariablen [{\"name\":\"X\",\"value\":\"Startwert\"}]. Variablen, in die ein Schritt schreibt (z.B. TSetProjectVar Variable_name, TExecuteCommand Target_variable/ExitCode, OutputVar, ResultVariable), werden wie in der Console automatisch ergaenzt; Liste wird alphabetisch sortiert.");
+            cp["longDescription"] = Prop("string", "Optional: Beschreibungstext.");
+            cp["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
+            tools.Add(Tool("acmp_cc_create_draft",
+                "Legt einen NEUEN Client Command als ENTWURF direkt in der ACMP-DB an (State 1, nicht freigegeben). Flags/Bedingungen kommen aus der konfigurierten Vorlage. Freigeben in der ACMP-Console." + gateNote,
+                cp, new[] { "name", "folder", "steps" }));
+            var up = new JObject();
+            up["scriptId"] = Prop("string", "ScriptId-GUID eines vom MCP angelegten Entwurfs.");
+            up["steps"] = Prop("array", stepsHelp + " Ersetzt den kompletten Schrittbaum.");
+            up["variables"] = Prop("array", "Optional: Projektvariablen (ersetzt die Liste). Von Schritten beschriebene Variablen werden automatisch ergaenzt.");
+            up["name"] = Prop("string", "Optional: neuer Name.");
+            up["longDescription"] = Prop("string", "Optional: neuer Beschreibungstext.");
+            up["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
+            tools.Add(Tool("acmp_cc_update_draft",
+                "Ersetzt die Schritte eines vom MCP angelegten ENTWURFS (State 1). Sichert vorher automatisch (Antwort nennt die Sicherungsdatei). Freigegebene oder fremde Commands werden abgelehnt." + gateNote,
+                up, new[] { "scriptId", "steps" }));
+            var rp = new JObject();
+            rp["backup"] = Prop("string", "Dateiname der Sicherung (aus der Antwort von acmp_cc_update_draft).");
+            rp["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
+            tools.Add(Tool("acmp_cc_restore_draft",
+                "Setzt einen vom MCP angelegten Entwurf auf eine Sicherung zurueck (sichert den aktuellen Stand vorher erneut)." + gateNote,
+                rp, new[] { "backup" }));
+            var af = new JObject();
+            af["scriptId"] = Prop("string", "ScriptId-GUID eines vom MCP angelegten Entwurfs.");
+            af["source"] = Prop("string", "UNC-Pfad der Datei, nur unterhalb der erlaubten Freigaben (ccWriter.fileSourceRoots" + (CCW.FileSourceRoots.GetEnumerator().MoveNext() ? ": " + string.Join(", ", new List<string>(CCW.FileSourceRoots).ToArray()) : ", noch keine eingetragen") + "), z.B. \\\\server\\freigabe\\Software\\7zip\\7z.msi.");
+            af["name"] = Prop("string", "Optional: Dateiname im Command (Standard: Name der Quelldatei). Nur ein Dateiname, kein Pfad.");
+            af["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
+            tools.Add(Tool("acmp_cc_add_file",
+                "Haengt eine Installationsdatei an einen vom MCP angelegten ENTWURF an (wie 'Datei hinzufuegen' im File Repository der Console, Ordner private): kopiert sie ins ACMP File Repository und traegt sie mit SHA-256 in SYS_SCRIPT_FILES ein. Die Antwort enthaelt einen fertigen TDownloadFile-Schritt ('downloadStep') fuer acmp_cc_create_draft/update_draft." + gateNote + (CCW.ApprovalGate ? " Die Pruefsumme der Quelldatei wird bei der Anfrage festgehalten und vor dem Kopieren verglichen." : ""),
+                af, new[] { "scriptId", "source" }));
+            var rf = new JObject();
+            rf["scriptId"] = Prop("string", "ScriptId-GUID eines vom MCP angelegten Entwurfs.");
+            rf["name"] = Prop("string", "Dateiname wie angehaengt (mit oder ohne 'private\\').");
+            rf["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
+            tools.Add(Tool("acmp_cc_remove_file",
+                "Entfernt eine angehaengte Datei von einem vom MCP angelegten ENTWURF (DB-Eintrag weg, Datei wird in den Sicherungsordner verschoben, nicht geloescht)." + gateNote,
+                rf, new[] { "scriptId", "name" }));
+            var mv = new JObject();
+            JObject mvm = Prop("array", AcmpCcWriter.MoveHelp);
+            mvm["items"] = new JObject(new JProperty("type", "object"));
+            mv["moves"] = mvm;
+            JObject mvc = Prop("array", "Kurzform statt moves: Namen oder ScriptIds, alle in denselben Zielordner (folder).");
+            mvc["items"] = new JObject(new JProperty("type", "string"));
+            mv["commands"] = mvc;
+            mv["folder"] = Prop("string", "Nur mit commands: Zielordner (GUID, eindeutiger Name oder Pfad aus acmp_cc_folders).");
+            mv["undo"] = Prop("string", "Statt moves/commands: Dateiname der Sicherung aus einer frueheren Antwort von acmp_cc_move - verschiebt alle Commands dieses Auftrags zurueck.");
+            mv["dryRun"] = Prop("boolean", "true = nur aufloesen, pruefen und Vorschau zeigen, nichts schreiben. Vor jeder Anfrage empfohlen.");
+            mv["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cc_move",
+                "Verschiebt einen oder viele Client Commands (auch freigegebene, auch Aagon-Standard-Commands) in andere Client-Command-Ordner - wie 'Client Command verschieben' in der Console: geaendert wird nur der Ordner (SYS_SCRIPTS.FOLDERID, alle Versionen); Inhalt, Freigabe, Rechte, Kiosk-Eintraege und Jobs bleiben. Ein Auftrag = eine Freigabe, eine Transaktion, vorher Sicherung (zurueck mit undo)." +
+                (CCW.MoveScope.Count > 0 ? " Nur innerhalb von ccWriter.moveScopeFolderIds." : "") + gateNote,
+                mv, null));
+            var nf = new JObject();
+            JObject nfl = Prop("array", AcmpCcWriter.AddFolderHelp);
+            nfl["items"] = new JObject(new JProperty("type", "object"));
+            nf["folders"] = nfl;
+            nf["name"] = Prop("string", "Einzeln statt folders: Name des neuen Ordners (max. 200 Zeichen, ohne \\ und /, eindeutig unter dem Elternordner).");
+            nf["parent"] = Prop("string", "Einzeln, optional: Elternordner (GUID, Name oder Pfad; Standard: oberster Ordner 'Available commands').");
+            nf["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+            nf["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cc_add_folder",
+                "Legt einen oder mehrere neue Client-Command-Ordner an (wie 'Ordner hinzufuegen' in der Console, Standard-Ordnersymbol), auch Unterordner von Ordnern aus demselben Auftrag; Rechte je Ordner wie der Elternordner. Ein Auftrag = eine Freigabe, eine Transaktion. Umbenennen/Verschieben: acmp_cc_update_folder; Loeschen bleibt in der Console." +
+                (CCW.MoveScope.Count > 0 ? " Nur innerhalb von ccWriter.moveScopeFolderIds." : "") + gateNote,
+                nf, null));
+            var uf = new JObject();
+            JObject ufc = Prop("array", AcmpCcWriter.FolderChangeHelp);
+            ufc["items"] = new JObject(new JProperty("type", "object"));
+            uf["changes"] = ufc;
+            uf["folder"] = Prop("string", "Einzeln statt changes: der Ordner (GUID, eindeutiger Name oder Pfad aus acmp_cc_folders).");
+            uf["name"] = Prop("string", "Einzeln: neuer Name (max. 200 Zeichen, ohne \\ und /).");
+            uf["parent"] = Prop("string", "Einzeln: neuer Elternordner (GUID, Name oder Pfad; 'Available commands' = oberste Ebene).");
+            uf["undo"] = Prop("string", "Statt changes/folder: Dateiname der Sicherung aus einer frueheren Antwort von acmp_cc_update_folder - setzt alle Ordner dieses Auftrags zurueck.");
+            uf["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben. Vor jeder Anfrage empfohlen.");
+            uf["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cc_update_folder",
+                "Benennt Client-Command-Ordner um und/oder haengt sie unter einen anderen Elternordner (wie 'Ordner bearbeiten' in der Console: Name, Zielordner), auch mehrere in einem Auftrag. Geaendert wird nur SYS_SCRIPT_STRUCTURE.Description/ParentID; Rechte und Icon bleiben, Unterordner und Commands ziehen mit. Keine Zyklen; der oberste Ordner und die Aagon-Standardordner (StrucLevel 0, in acmp_cc_folders aagon=true) bleiben unveraendert. Ein Auftrag = eine Freigabe, eine Transaktion, vorher Sicherung (zurueck mit undo)." +
+                (CCW.MoveScope.Count > 0 ? " Nur innerhalb von ccWriter.moveScopeFolderIds." : "") + gateNote,
+                uf, null));
+            var rl = new JObject();
+            JObject rli = Prop("array", AcmpCcWriter.ReleaseHelp);
+            rli["items"] = new JObject(new JProperty("type", "string"));
+            rl["scriptIds"] = rli;
+            rl["scriptId"] = Prop("string", "Einzeln statt scriptIds: ScriptId-GUID (oder eindeutiger Name) eines vom MCP angelegten Entwurfs.");
+            rl["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (je Command Ordner, Schritte, Dateien, FileRepoSize, Hinweise), nichts freigeben. Vor jeder Anfrage empfohlen.");
+            rl["details"] = Prop("boolean", "Nur mit dryRun: auch den Inhalt jedes Commands (Variablen, Schritte mit Feldern) zeigen. Standard aus, weil viele Commands sehr lang werden; die Freigabeseite zeigt den Inhalt immer.");
+            rl["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cc_release",
+                "Gibt vom MCP angelegte Client-Command-ENTWUERFE frei (wie 'Freigeben' in der ACMP-Console): State 1 -> 7, IsFileRepoVersionIncreased -> False, FileRepoSize aus den angehaengten Dateien; danach per Kiosk/Job ausfuehrbar. Nur eigene Entwuerfe (cc-drafts.json) mit genau einer Version; Platzhalter wie 'HIER ... EINTRAGEN' sperren. Mehrere Commands in einem Auftrag = eine Freigabe, eine Transaktion, vorher Sicherung. " +
+                "Laeuft IMMER ueber die Vier-Augen-Freigabe (auch wenn andere Tools sie gerade ueberspringen): die Anfrage friert Inhalt (SHA-256) und Dateien ein; hat sich bis zur Zustimmung etwas geaendert, wird nichts freigegeben. Zuruecknehmen kann das Tool eine Freigabe nicht.",
+                rl, null));
+        }
+
         var r = new JObject(); r["tools"] = tools; return r;
+    }
+
+    // ACMP-Version "Major.Minor.Patch" aus GetACMPServerInfo (fuer die Kompatibilitaetspruefung des CC-Writers)
+    static string AcmpVersionString()
+    {
+        string x = CONN.Call("GetACMPServerInfo", 1, "");
+        var ma = System.Text.RegularExpressions.Regex.Match(x, "<MajorVersion>(\\d+)</MajorVersion>");
+        var mi = System.Text.RegularExpressions.Regex.Match(x, "<MinorVersion>(\\d+)</MinorVersion>");
+        var pl = System.Text.RegularExpressions.Regex.Match(x, "<PatchLevel>(\\d+)</PatchLevel>");
+        if (!ma.Success || !mi.Success) return null;
+        return ma.Groups[1].Value + "." + mi.Groups[1].Value + (pl.Success ? "." + pl.Groups[1].Value : "");
+    }
+
+    // Schreibende CC-Tools ueber die Vier-Augen-Freigabe? (ccWriter.approvalGate, Freigabe aktiv, Tool nicht auf Zaehlwert 0)
+    static bool CcGateActive(string tool)
+    {
+        if (CCW == null || !CCW.ApprovalGate) return false;
+        if (APPROVAL == null || !APPROVAL.Enabled || APPROVAL.BypassAll) return false;
+        return !NoApprovalTools.Contains(tool);
+    }
+
+    // acmp_cc_release: Freigabe-Seite vorhanden und ccWriter.approvalGate an? (bypassAll und Zaehlwerte spielen keine Rolle)
+    static bool CcReleaseGateAvailable()
+    {
+        return CCW != null && CCW.ApprovalGate && APPROVAL != null && APPROVAL.Enabled;
+    }
+
+    // Fuehrt ein schreibendes CC-Tool aus (direkt oder durch den Freigabe-Worker mit den eingefrorenen Argumenten)
+    static JObject RunCcTool(string name, JObject a, string requester)
+    {
+        Log(name + " von " + requester + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
+        if (name.StartsWith("acmp_kiosk_")) return KIOSK.Execute(name, a, requester);
+        if (name == "acmp_cc_create_draft" || name == "acmp_cc_update_draft")
+        {
+            List<string> notes;
+            CcScript s = CCW.BuildScript(a["steps"] as JArray, a["variables"] as JArray, out notes);
+            return name == "acmp_cc_create_draft"
+                ? CCW.CreateDraft((string)a["name"], (string)a["folder"], (string)a["longDescription"], s, requester, notes)
+                : CCW.UpdateDraft((string)a["scriptId"], (string)a["name"], (string)a["longDescription"], s, requester, notes);
+        }
+        if (name == "acmp_cc_restore_draft") return CCW.RestoreDraft((string)a["backup"], requester);
+        if (AcmpCcWriter.IsFolderWriteTool(name)) return CCW.RunFolderOp(name, a, requester);
+        if (name == "acmp_cc_release") return CCW.RunRelease(a, requester);   // nur mit eingefrorenem Plan aus der Freigabe-Anfrage
+        if (name == "acmp_cc_add_file") return CCW.AddFile((string)a["scriptId"], (string)a["source"], (string)a["name"], requester, (string)a["_expectSha256"]);
+        if (name == "acmp_cc_remove_file") return CCW.RemoveFile((string)a["scriptId"], (string)a["name"], requester);
+        if (name == "acmp_lib_install") return CTL.Install(a, requester);
+        throw new Exception("Unbekanntes CC-Tool: " + name);
+    }
+
+    // Freigabe-Anfrage fuer ein schreibendes CC-Tool: vorher pruefen (Fehler sofort melden), Argumente einfrieren, Vorschau bauen
+    static JObject GateCcTool(string name, JObject a, string requester)
+    {
+        CCW.CheckWrite(requester, name == "acmp_cc_add_file" || name == "acmp_cc_remove_file");
+        JObject frozen = (JObject)a.DeepClone();
+        JArray preview;
+        if (name == "acmp_cc_create_draft" || name == "acmp_cc_update_draft")
+        {
+            List<string> notes;
+            CcScript s = CCW.BuildScript(a["steps"] as JArray, a["variables"] as JArray, out notes);
+            var head = new List<string>();
+            if (name == "acmp_cc_create_draft") head.Add("Neuen Entwurf \"" + (string)a["name"] + "\" im Ordner \"" + (string)a["folder"] + "\" anlegen.");
+            else head.Add("Entwurf " + (string)a["scriptId"] + " aendern: kompletter Schrittbaum wird ersetzt" + (a["name"] != null ? ", neuer Name \"" + (string)a["name"] + "\"" : "") + ".");
+            foreach (string n in notes) head.Add("Hinweis: " + n);
+            head.Add("Schritte:");
+            preview = CCW.PreviewScript(head, s);
+        }
+        else if (name == "acmp_cc_restore_draft") preview = CCW.PreviewRestore((string)a["backup"]);
+        else if (AcmpCcWriter.IsFolderWriteTool(name))
+        {
+            // Plan einfrieren: aufgeloeste ScriptIds, Quell-/Zielordner bzw. neue Ordner-Id - genau dieser Plan wird ausgefuehrt
+            CCW.CheckFolderWrite(name, requester);
+            JObject plan = CCW.PlanFolderOp(name, a);
+            preview = (JArray)plan["vorschau"];
+            frozen = new JObject();
+            frozen["_plan"] = plan;
+        }
+        else if (name == "acmp_cc_release")
+        {
+            // Plan einfrieren: Version, SHA-256 von Client-/Console-Skript, Dateien mit SHA-256, neue FileRepoSize - genau das wird freigegeben
+            CCW.CheckReleaseWrite(requester);
+            JObject plan = CCW.PlanRelease(a, true);
+            preview = (JArray)plan["vorschau"];
+            frozen = new JObject();
+            frozen["_plan"] = plan;
+        }
+        else if (name == "acmp_cc_add_file")
+        {
+            JObject p = CCW.PrepareAddFile((string)a["scriptId"], (string)a["source"], (string)a["name"], requester);
+            frozen["_expectSha256"] = (string)p["sha256"];
+            preview = new JArray("Datei an Entwurf " + (string)p["scriptId"] + " anhaengen: private\\" + (string)p["name"],
+                                 "Quelle: " + (string)p["source"] + " (" + (long)p["bytes"] + " Byte)",
+                                 "SHA-256: " + (string)p["sha256"] + " (bei der Ausfuehrung verglichen)");
+        }
+        else if (name == "acmp_cc_remove_file")
+            preview = new JArray("Datei \"" + (string)a["name"] + "\" von Entwurf " + (string)a["scriptId"] + " entfernen (DB-Eintrag weg, Datei wird nach cc-backups verschoben, nicht geloescht).");
+        else if (name == "acmp_lib_install") frozen = CTL.FreezeForApproval(a, requester, out preview);
+        else throw new Exception("Unbekanntes CC-Tool: " + name);
+        string intent = a["intent"] != null ? (string)a["intent"] : null;
+        frozen.Remove("intent");
+        string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester);
+        Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
+        return TextOut(APPROVAL.PendingMessage(id));
+    }
+
+    static JObject WriterStatus(bool refresh)
+    {
+        var o = new JObject();
+        o["enabled"] = CCW != null && CCW.ConfigOk;
+        if (CCW == null || !CCW.ConfigOk) { o["status"] = "aus"; o["reason"] = CCW != null ? CCW.DisabledReason : "nicht initialisiert"; return o; }
+        JObject pf = CCW.Preflight(refresh);
+        o["status"] = (bool)pf["ok"] ? "aktiv" : "gesperrt";
+        o["approvalGate"] = CCW.ApprovalGate;
+        o["gateWirksam"] = CcGateActive("acmp_cc_create_draft");
+        o["allowedRequesters"] = new JArray(new List<string>(CCW.AllowedRequesters).ToArray());
+        o["allowedFolderIds"] = new JArray(new List<string>(CCW.AllowedFolders).ToArray());
+        o["fileSourceRoots"] = new JArray(new List<string>(CCW.FileSourceRoots).ToArray());
+        o["moveScopeFolderIds"] = new JArray(new List<string>(CCW.MoveScope).ToArray());
+        o["ordnerTools"] = "acmp_cc_move " + ((bool)pf["ok"] ? "aktiv" : "gesperrt") + ", acmp_cc_add_folder " + (pf["folderTool"] != null && (bool)pf["folderTool"] ? "aktiv" : "gesperrt (Pruefung 'Ordner anlegen')") +
+            ", acmp_cc_update_folder " + (pf["folderEditTool"] != null && (bool)pf["folderEditTool"] ? "aktiv" : "gesperrt (Pruefung 'Ordner aendern')");
+        o["freigabeTool"] = "acmp_cc_release " + (pf["releaseTool"] == null || !(bool)pf["releaseTool"] ? "gesperrt (Pruefung 'Freigeben')"
+            : !CcReleaseGateAvailable() ? "gesperrt (nur mit Vier-Augen-Freigabe: approval-Section und ccWriter.approvalGate)"
+            : "aktiv (immer ueber die Vier-Augen-Freigabe, mind. 1 Zustimmung, auch bei bypassAll)");
+        o["testedAcmpVersions"] = new JArray(AcmpCcPreflight.TestedVersions);
+        o["knownTriggers"] = new JArray(AcmpCcPreflight.KnownTriggers);
+        o["preflight"] = pf;
+        return o;
+    }
+
+    // Schreibende Kiosk-Tools ueber die Vier-Augen-Freigabe? (kioskWriter.approvalGate bzw. ccWriter.approvalGate)
+    static bool KioskGateActive(string tool)
+    {
+        if (KIOSK == null || !KIOSK.ApprovalGate) return false;
+        if (APPROVAL == null || !APPROVAL.Enabled || APPROVAL.BypassAll) return false;
+        return !NoApprovalTools.Contains(tool);
+    }
+
+    // Freigabe-Anfrage: vorher pruefen und den Plan (aufgeloeste SIDs/GUIDs, neue Ids) einfrieren; genau dieser Plan wird geschrieben
+    static JObject GateKioskTool(string name, JObject a, string requester)
+    {
+        KIOSK.CheckWrite(requester);
+        JObject plan = KIOSK.Plan(name, a);
+        if (name.EndsWith("_image") || ((string)plan["action"] == "restore" && (string)plan["kind"] == "image")) KIOSK.CheckImageWrite();
+        if ((string)plan["action"] == "update_items" || ((string)plan["action"] == "restore" && (string)plan["kind"] == "items")) KIOSK.CheckUpdateWrite();
+        if ((string)plan["action"] == "update_group" || ((string)plan["action"] == "restore" && (string)plan["kind"] == "group")) KIOSK.CheckGroupWrite();
+        JArray preview = (JArray)plan["vorschau"];
+        var frozen = new JObject();
+        frozen["_plan"] = plan;
+        string intent = a["intent"] != null ? (string)a["intent"] : null;
+        string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester, KIOSK.PreviewImage(plan));
+        Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
+        return WithPreviews(TextOut(APPROVAL.PendingMessage(id)), KIOSK.ChatPreviews(plan));
     }
 
     // ---------- Pro-User-Identitaeten / Verbindungspool ----------
@@ -1071,7 +1568,7 @@ static class AcmpMcp
         if (name == "acmp_get_client_commands") return Respond(CONN.Call("GetClientCommandList", 1, ""), a);
         if (name == "acmp_get_asset_list") { int ver = a["version"] != null ? (int)a["version"] : 1; return Respond(CONN.Call("GetAssetList", ver, ""), a); }
                 if (name == "acmp_get_tickets") return Respond(CONN.Call("GetTicketList", 1, ""), a);
-        if (name == "acmp_helpdesk_settings") return Respond(CONN.Call("GetHelpDeskSettings", 2, ""), a);
+        if (name == "acmp_helpdesk_settings") return Respond(CONN.Call("GetHelpdeskSettings", 2, ""), a);   // Schreibweise wie im Befehlskatalog; "GetHelpDeskSettings" liefert "Invalid ICQL Request"
         if (name == "acmp_get_assignees") return Respond(CONN.Call("GetAssigneeList", 1, ""), a);
         if (name == "acmp_get_ticket")
         {
@@ -1541,6 +2038,102 @@ static class AcmpMcp
             if (!rr.Done) return TextOut("Noch keine Antwort vom Client fuer Token " + token + " (seit " + (int)(DateTime.UtcNow - rr.Created).TotalSeconds + "s). Bitte spaeter erneut versuchen.");
             return TextOut(FormatRegResult(rr));
         }
+        if (name == "acmp_cc_decode")
+        {
+            RequireDb();
+            string k = (string)a["command"]; if (string.IsNullOrEmpty(k)) throw new Exception("command fehlt");
+            int v = a["version"] != null ? (int)a["version"] : 0;
+            bool fx = a["fullXml"] != null && (bool)a["fullXml"];
+            return TextOut(CCW.DecodeCommand(k, v, fx).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_catalog")
+        {
+            RequireDb();
+            int ex = a["examples"] != null ? (int)a["examples"] : 0;
+            return TextOut(CCW.Catalog((string)a["className"], ex).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_writer_status")
+        {
+            RequireDb();
+            return TextOut(WriterStatus(a["refresh"] != null && a["refresh"].Type == JTokenType.Boolean && (bool)a["refresh"]).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_folders")
+        {
+            RequireDb();
+            return TextOut(CCW.Folders((string)a["folder"], a["commands"] != null && a["commands"].Type == JTokenType.Boolean && (bool)a["commands"]).ToString(Formatting.Indented));
+        }
+        if (AcmpCcWriter.IsFolderWriteTool(name))
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = CCW.PlanFolderOp(name, a);
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            if (CcGateActive(name)) return GateCcTool(name, a, requester);
+            return TextOut(RunCcTool(name, a, requester).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_release")
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = CCW.PlanRelease(a, a["details"] != null && a["details"].Type == JTokenType.Boolean && (bool)a["details"]);
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            // Immer ueber die Freigabe - bypassAll und Zaehlwert 0 gelten hier nicht (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
+            if (!CcReleaseGateAvailable())
+                throw new Exception("acmp_cc_release laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv und ccWriter.approvalGate=true) - nichts freigegeben. Sonst in der ACMP-Console freigeben.");
+            a.Remove("_plan");
+            return GateCcTool(name, a, requester);
+        }
+        if (name == "acmp_kiosk_tree")
+        {
+            RequireDb();
+            bool st = a["status"] != null && a["status"].Type == JTokenType.Boolean && (bool)a["status"];
+            JObject tr = KIOSK.Tree((string)a["group"], a["details"] != null && a["details"].Type == JTokenType.Boolean && (bool)a["details"]);
+            if (st) tr["schreiber"] = KIOSK.WriterInfo(true);
+            return TextOut(tr.ToString(Formatting.Indented));
+        }
+        if (name == "acmp_kiosk_images")
+        {
+            RequireDb();
+            JObject res = KIOSK.Images(a);
+            JArray pv = res["_previews"] as JArray; res.Remove("_previews");
+            return WithPreviews(TextOut(res.ToString(Formatting.Indented)), pv);
+        }
+        if (IsKioskWriteTool(name))
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = KIOSK.Plan(name, a);
+                JArray pv = KIOSK.ChatPreviews(plan);
+                plan.Remove("_data");   // Bilddaten nur fuer die Freigabe, nicht in die Antwort
+                plan["dryRun"] = true;
+                return WithPreviews(TextOut(plan.ToString(Formatting.Indented)), pv);
+            }
+            if (KioskGateActive(name)) return GateKioskTool(name, a, requester);
+            return TextOut(RunCcTool(name, a, requester).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_lib_install" && a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+        {
+            RequireDb();
+            Log(name + " von " + requester + " [dryRun]");
+            return TextOut(CTL.Install(a, requester).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_create_draft" || name == "acmp_cc_update_draft" || name == "acmp_cc_restore_draft" ||
+            name == "acmp_cc_add_file" || name == "acmp_cc_remove_file" || name == "acmp_lib_install")
+        {
+            RequireDb();
+            if (CcGateActive(name)) return GateCcTool(name, a, requester);
+            return TextOut(RunCcTool(name, a, requester).ToString(Formatting.Indented));
+        }
         foreach (JObject d in ApiToolDefs)
         {
             if ((string)d["name"] != name) continue;
@@ -1562,6 +2155,24 @@ static class AcmpMcp
         var c = new JObject(); c["type"] = "text"; c["text"] = text != null ? text : "";
         var arr = new JArray(); arr.Add(c);
         var r = new JObject(); r["content"] = arr; return r;
+    }
+
+    // Vorschaubilder der Kiosk-Tools anhaengen: je Bild ein Text-Block (Beschriftung) und ein Bild-Block (PNG),
+    // ohne Bild nur der Text mit dem Grund (z.B. SVG). So sieht Claude die Bilder und kann sie zur Auswahl zeigen.
+    static JObject WithPreviews(JObject r, JArray previews)
+    {
+        if (previews == null) return r;
+        var content = (JArray)r["content"];
+        foreach (JObject p in previews)
+        {
+            var t = new JObject(); t["type"] = "text";
+            t["text"] = (string)p["label"] + (p["data"] == null ? " - " + (string)p["hinweis"] : "");
+            content.Add(t);
+            if (p["data"] == null) continue;
+            var im = new JObject(); im["type"] = "image"; im["data"] = p["data"]; im["mimeType"] = "image/png";
+            content.Add(im);
+        }
+        return r;
     }
 
     // Verarbeitet den Rueckkanal-POST des Clients (acmp_read_registry): { token, ok, value, error }.

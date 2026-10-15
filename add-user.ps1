@@ -1,15 +1,19 @@
 # Weiteren Bediener fuer den ACMP-MCP-Server anlegen (braucht Admin-Rechte - startet sich bei Bedarf selbst erhoeht neu).
 #   cd C:\ProgramData\AcmpMcp
 #   .\add-user.ps1
-#   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm -Approver -Email m.mustermann@firma.de
+#   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm -Approver -Email m.mustermann@firma.de [-Writer]
 #
 # Wie /onboarding auf der Weboberflaeche, nur im Terminal: erzeugt MCP-API-Key und optional
 # einen Freigabe-Login, startet den Dienst neu und zeigt am Ende Links und Client-Konfiguration.
+# Ist der CC-Writer eingerichtet, fragt es zusaetzlich, ob die Person Client Commands und den Kiosk
+# schreiben darf (ccWriter.allowedRequesters). Ueber /onboarding angelegte Bediener schaltet ihr dafuer
+# mit .\setup-cc-writer.ps1 -AddRequester <kurzname> frei.
 param(
   [string]$Name,
   [string]$AcmpUser,
   [switch]$Approver,
   [string]$Email,
+  [switch]$Writer,
   [switch]$NonInteractive
 )
 $ErrorActionPreference = 'Stop'
@@ -51,10 +55,26 @@ if ($isApprover -and -not $Email) {
   if (-not $ask) { throw "-Email fehlt (Pflicht fuer Freigeber)." }
   $Email = Read-Value "E-Mail fuer Freigabe-Benachrichtigungen" "" '^[^@\s]+@[^@\s]+$' "Bitte eine gueltige E-Mail-Adresse."
 }
+$ccOn = $cfg.ccWriter -and $cfg.ccWriter.enabled
+$isWriter = [bool]$Writer
+if ($ccOn -and -not $PSBoundParameters.ContainsKey('Writer') -and $ask) {
+  Write-Info "Schreib-Tools (Client Commands als Entwurf, Freigeben, Ordner, Kiosk) laufen ueber einen eigenen SQL-Login des Servers."
+  Write-Info "Wer sie beantragen darf, steht in ccWriter.allowedRequesters. Zustimmen muss trotzdem ein Freigeber."
+  $isWriter = Read-YesNo "Darf '$Name' diese Schreib-Tools beantragen?" $false
+}
+if ($isWriter -and -not $ccOn) { Write-Hint "CC-Writer ist nicht eingerichtet - Schreibrecht wird nicht eingetragen (spaeter: setup-cc-writer.ps1)."; $isWriter = $false }
 
 Write-Step 2 3 "Anlegen und aktivieren"
 $created = Add-McpUser $cfgPath $Name $AcmpUser $isApprover $Email
 Write-Ok "Bediener '$Name' angelegt"
+if ($isWriter) {
+  $cfg = Read-AcmpConfig $cfgPath
+  $lists = @("ccWriter")
+  if ($cfg.kioskWriter -and $cfg.kioskWriter.PSObject.Properties["allowedRequesters"]) { $lists += "kioskWriter" }
+  foreach ($sec in $lists) { Set-CfgProp $cfg.$sec "allowedRequesters" @(@($cfg.$sec.allowedRequesters | Where-Object { $_ }) + $Name | Select-Object -Unique) }
+  Save-AcmpConfig $cfg $cfgPath
+  Write-Ok "'$Name' darf die Schreib-Tools beantragen ($($lists -join ', ').allowedRequesters)"
+}
 $r = Restart-AcmpMcp $base
 if ($r.State -ne "ok") { Write-Bad "Neustart: $($r.Message)"; exit 2 }
 Write-Ok "Dienst neu gestartet - neuer Key ist aktiv"

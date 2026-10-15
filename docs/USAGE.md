@@ -40,6 +40,20 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 - „Buche 30 Min Arbeitszeit auf Ticket #1234." → SaveTicketWorkingTime
 - „Schließe Ticket #1234." → CloseTicket
 
+## 5) Client Commands bauen und einsortieren (optional, CC-Writer)
+- „Zeig mir die Schritte des Client Commands ‚7-Zip‘." → `acmp_cc_decode`
+- „Bau mir einen Client Command, der den Druckerwarteschlangen-Dienst neu startet, als Entwurf im Ordner ‚MCP Entwürfe‘." → `acmp_cc_create_draft` (Freigabe-Anfrage mit allen Schritten)
+- „Häng die Datei `\\server\software\setup.msi` an den Entwurf." → `acmp_cc_add_file`
+- „Gib den Entwurf frei." → `acmp_cc_release` (immer mit Freigabe-Anfrage)
+- „Leg unter ‚Software‘ einen Ordner ‚Office‘ an und verschieb alle Office-Commands dorthin." → `acmp_cc_add_folder`, `acmp_cc_move`
+
+## 6) Kiosk (optional, Kiosk-Writer)
+- „Wie ist der Kiosk aufgebaut, und wer sieht was?" → `acmp_kiosk_tree` (Filter im Klartext)
+- „Stell den Command ‚7-Zip installieren‘ in den Kiosk-Ordner ‚Allgemein‘, sichtbar nur für die AD-Gruppe ‚Buchhaltung‘." → `acmp_kiosk_add_item`
+- „Zeig mir passende Icons für 7-Zip." → `acmp_kiosk_images` mit Vorschau, dann `acmp_kiosk_set_image`
+- „Benenn den Kiosk-Ordner ‚Tools‘ in ‚Werkzeuge‘ um." → `acmp_kiosk_update_group`
+- „Mach die letzte Kiosk-Änderung rückgängig." → `acmp_kiosk_restore`
+
 ## Wenn etwas nicht klappt
 - ACMP liefert sprechende Fehler, z.B. *„ClientCommandId: Value may not be empty"* – die KI erkennt
   daran fehlende Pflichtfelder und korrigiert sich. Sagen Sie ggf. „probier's nochmal, das Feld fehlt".

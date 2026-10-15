@@ -1,6 +1,6 @@
 # ACMP-MCP-Server
 
-Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** ([Aagon Client Management Platform](https://www.aagon.com/)). Er stellt ACMP als Werkzeuge für jeden MCP-fähigen KI-Client bereit (Claude, ChatGPT/Codex, GitHub Copilot, Gemini, Cursor …): Clients, Container, Jobs/Client Commands, Tickets, Assets, Inventar und Stammdaten. Eingebaut sind eine **Vier-Augen-Freigabe** für schreibende, ausführende und löschende Aktionen und eine Weboberfläche zur Verwaltung.
+Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** ([Aagon Client Management Platform](https://www.aagon.com/)). Er stellt ACMP als Werkzeuge für jeden MCP-fähigen KI-Client bereit (Claude, ChatGPT/Codex, GitHub Copilot, Gemini, Cursor …): Clients, Container, Jobs/Client Commands, Tickets, Assets, Inventar und Stammdaten. Optional legt er auch **Client Commands** an, gibt sie frei und sortiert sie ein und pflegt den **Kiosk** (Einträge, Ordner, Sichtbarkeit, Icons), beides direkt in der ACMP-Datenbank und standardmäßig aus. Eingebaut sind eine **Vier-Augen-Freigabe** für schreibende, ausführende und löschende Aktionen und eine Weboberfläche zur Verwaltung.
 
 Er läuft als eigenständige Windows-EXE direkt auf eurem ACMP-Server: kein IIS, kein .NET-SDK, keine Cloud.
 
@@ -107,7 +107,7 @@ Der Server verbindet eine KI mit ACMP. Ihr fragt in normaler Sprache, zum Beispi
 
 🟢 läuft sofort (nur lesen) · 🟡 Freigabe durch 1 Person · 🔴 Freigabe durch 2 verschiedene Personen
 
-Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/settings` anpassen. Ein *(DB)* hinter einem Tool heißt: Es braucht die optionale Datenbank-Anbindung (`db.connectionString`, nur lesend). Ein *(PS)* heißt: Es braucht die optionale Client-Command-Vorlage (`runPowershell.clientCommandId`). Die aktuelle Liste liefert `tools/list`.
+Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/settings` anpassen. Ein *(DB)* hinter einem Tool heißt: Es braucht die optionale Datenbank-Anbindung (`db.connectionString`, nur lesend). Ein *(PS)* heißt: Es braucht die optionale Client-Command-Vorlage (`runPowershell.clientCommandId`). Ein *(CW)* heißt: Es braucht den optionalen CC-Writer (`ccWriter`, standardmäßig aus), *(KW)* den optionalen Kiosk-Writer (`kioskWriter`). Die aktuelle Liste liefert `tools/list`.
 
 ### System & Allgemein
 
@@ -120,6 +120,8 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 | 🟡 | `acmp_call` | jedes API-Kommando ohne eigenes Tool. Lesende Kommandos laufen sofort, schreibende brauchen eine Freigabe |
 | 🟢 | `acmp_approval_status` | Stand eines Freigabe-Antrags |
 | 🟢 | `acmp_discover_tables` *(DB)* | Tabellen in der ACMP-Datenbank suchen („Was hat mit BitLocker zu tun?“) |
+| 🟢 | `acmp_db_columns` *(DB)* | Spalten einer Tabelle oder View |
+| 🟢 | `acmp_db_script_rows`, `acmp_db_script_blob` *(beide DB)* | Zeilen und Binärspalten der Client-Command-, Kiosk- und File-Repository-Tabellen (nur diese) |
 
 ### Clients & Inventar
 
@@ -154,6 +156,43 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 | 🟢 | `acmp_get_jobs`, `acmp_job_results` *(DB)*, `acmp_script_history` *(DB)* | was auf einem Rechner gelaufen ist und mit welchem Ergebnis |
 | 🟡 | `acmp_enqueue_client_command` | einen vorhandenen Client Command starten |
 | 🔴 | `acmp_run_powershell` *(PS)* | beliebiges PowerShell als SYSTEM auf einem Client |
+
+### Client Commands lesen, schreiben, freigeben und einsortieren
+
+Die Public API kann Client Commands nur starten, nicht anlegen. Diese Tools lesen sie deshalb direkt aus der ACMP-Datenbank, legen auf Wunsch **Entwürfe** an, geben eigene Entwürfe frei und sortieren Commands in Ordner. Das Schreiben ist von Aagon nicht vorgesehen und deshalb standardmäßig aus. Einrichtung: [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md) → „Client Commands direkt schreiben“.
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_cc_decode` *(DB)* | Schritte eines Client Commands im Klartext, als Eingabe für einen neuen Entwurf verwendbar. Kennwörter werden maskiert |
+| 🟢 | `acmp_cc_catalog` *(DB)* | welche Schrittarten in euren Commands vorkommen, mit Feldern und Beispielen |
+| 🟢 | `acmp_cc_folders` *(DB)* | Ordnerbaum der Client Commands, auf Wunsch mit den Commands je Ordner |
+| 🟢 | `acmp_cc_writer_status` *(DB)* | Stand des Writers und Ergebnis der Kompatibilitätsprüfung |
+| 🟡 | `acmp_cc_create_draft`, `acmp_cc_update_draft` *(CW)* | Entwurf anlegen oder seine Schritte ersetzen (vorher automatische Sicherung) |
+| 🟡 | `acmp_cc_restore_draft` *(CW)* | Entwurf auf eine Sicherung zurücksetzen |
+| 🟡 | `acmp_cc_add_file`, `acmp_cc_remove_file` *(CW)* | Installationsdatei an einen Entwurf hängen oder entfernen (File Repository, mit SHA-256) |
+| 🟡 | `acmp_cc_release` *(CW)* | eigene Entwürfe freigeben wie in der Konsole, mehrere in einem Auftrag. Läuft **immer** über die Freigabe-Seite, auch wenn sie sonst abgeschaltet ist |
+| 🟡 | `acmp_cc_move` *(CW)* | viele Commands in einem Auftrag in andere Ordner verschieben, mit `undo` |
+| 🟡 | `acmp_cc_add_folder`, `acmp_cc_update_folder` *(CW)* | Ordner anlegen (Rechte wie der Elternordner), umbenennen oder verschieben |
+| 🟡 | `acmp_lib_install` *(DB, CW)* | Vorlage aus der ACMP CTL (Community Template Library, Repo folgt) oder einem eigenen Vorlagen-Ordner als Entwurf installieren. Mit `dryRun` 🟢 auch ohne Writer |
+
+Der Writer ändert nur eigene Entwürfe im erlaubten Ordner und nur für erlaubte Bediener. Jede Schreibaktion läuft über die Freigabe-Seite, die Vorschau zeigt jeden Schritt mit seinen Feldern. Vor dem Schreiben prüft der Server die ACMP-Version, Tabellen, Trigger und Rechte des Schreib-Logins. Er packt außerdem die 50 neuesten Commands probeweise aus und wieder ein. Weicht etwas ab, etwa nach einem ACMP-Update, schreibt er nichts. Freigeben geht nur für Commands mit genau einer Version, deren Inhalt seit der Anfrage gleich geblieben ist. Platzhalter wie „HIER … EINTRAGEN“ sperren die Freigabe. Getestet mit ACMP 6.10.
+
+### Kiosk
+
+Auch den ACMP-Kiosk kann die Public API nicht pflegen. Diese Tools lesen und schreiben ihn deshalb direkt in der ACMP-Datenbank. Auch das ist standardmäßig aus. Einrichtung: [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md) → „Kiosk pflegen“. *(KW)* = braucht den optionalen Kiosk-Writer (`kioskWriter`).
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_kiosk_tree` *(DB)* | Kiosk-Ordner, Einträge und Sichtbarkeitsfilter im Klartext; mit `status: true` das Ergebnis der Vorprüfung |
+| 🟢 | `acmp_kiosk_images` *(DB)* | vorhandene Icons und Bilddateien in den erlaubten Quellen, mit Vorschau im Chat |
+| 🟡 | `acmp_kiosk_add_item` *(KW)* | Client Command oder Managed Software als Kiosk-Eintrag anlegen, mit Icon und Sichtbarkeitsfilter (AD-Gruppe, OU, Benutzer, Container, Stammdaten …) |
+| 🟡 | `acmp_kiosk_update_items` *(KW)* | viele Einträge in einem Auftrag verschieben, umbenennen, Beschreibung, Icon oder Filter ändern |
+| 🟡 | `acmp_kiosk_set_filter`, `acmp_kiosk_remove_item` *(KW)* | Sichtbarkeit eines Eintrags ändern, Eintrag entfernen |
+| 🟡 | `acmp_kiosk_add_group`, `acmp_kiosk_update_group` *(KW)* | Kiosk-Ordner anlegen, umbenennen (DE/EN), Icon und Filter ändern |
+| 🟡 | `acmp_kiosk_add_image`, `acmp_kiosk_set_image`, `acmp_kiosk_remove_image` *(KW)* | Icon hochladen (PNG, JPG, ICO, SVG), setzen, ungenutztes eigenes Icon entfernen |
+| 🟡 | `acmp_kiosk_restore` *(KW)* | eine Kiosk-Änderung aus der automatischen Sicherung zurückholen |
+
+Geschrieben wird nur in Kiosk-Ordnern, die ihr freigebt, und in Ordnern, die der MCP selbst angelegt hat. Vor jeder Änderung sichert der Server den alten Stand. Die Anwender sehen Änderungen nach „Aktualisieren“ im Kiosk.
 
 ### Container
 
@@ -213,12 +252,18 @@ Jedes Tool akzeptiert optional `format: "json"`. Beispiel-Prompts stehen in [`do
 | `runPowershell.clientCommandId` | optional, aktiviert `acmp_run_powershell` / `acmp_read_registry` |
 | `db.connectionString` | optional, aktiviert die DB-Report-Tools |
 | `helpdesk.createdStateId` | optional, Ticketstatus für neue Tickets |
+| `ccWriter.*` | optional, standardmäßig aus: Client Commands als Entwurf schreiben, freigeben, einsortieren. Einrichten mit `setup-cc-writer.ps1`, weitere Bediener mit `setup-cc-writer.ps1 -AddRequester <name>` |
+| `kioskWriter.*` | optional, standardmäßig aus: Kiosk pflegen. Setzt den CC-Writer voraus (gleicher SQL-Login). Einrichten mit `setup-kiosk-writer.ps1` |
+| `ctl.sources` | optional, Quellen für `acmp_lib_install`. Standard: Ordner `ctl` im Installationsordner, dann das Repo `Herzog-GmbH/acmp-ctl` (folgt) |
 
 ## Sicherheit
 
 - Der Server gewährt vollen ACMP-Zugriff bis hin zur **Befehlsausführung auf allen Endgeräten**. Behandelt jeden API-Key wie ein Admin-Passwort.
 - **Kein TLS eingebaut.** Der Server lauscht standardmäßig nur auf `127.0.0.1` und verweigert LAN-Betrieb ohne API-Key. Im LAN beschränkt ihr per Firewall die Quell-Subnetze. Über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor.
 - `install.ps1` beschränkt den Installationsordner auf Administratoren und SYSTEM, denn dort liegen Zugangsdaten.
+- Der optionale CC-Writer schreibt mit einem **eigenen SQL-Login** mit genau den nötigen Rechten (`grant-cc-writer.sql`), nie mit dem Lese-Zugang. In `SYS_SCRIPTS` darf er nichts löschen. Er legt nur Entwürfe an, sichert vor jeder Änderung und ändert oder gibt nur Commands frei, die er selbst angelegt hat. Verschieben darf er auch fremde Commands, löschen nichts.
+- Der optionale Kiosk-Writer nutzt denselben Login mit den Rechten aus `grant-kiosk-writer.sql`. Ordner löschen darf er nicht, und er schreibt nur in freigegebene Kiosk-Ordner.
+- Wichtig für das Onboarding: Der SQL-Login gehört dem **Server**, nicht den Bedienern. Wer die Schreib-Tools beantragen darf, steht in `ccWriter.allowedRequesters` (`add-user.ps1` fragt danach, für Bediener aus `/onboarding`: `setup-cc-writer.ps1 -AddRequester <name>`). Zustimmen muss trotzdem ein Freigeber. Die ACMP-Rechte der Person prüft ACMP bei diesen Tools **nicht**, weil sie an der Public API vorbei in die Datenbank schreiben.
 - Bediener-Passwörter werden nie gespeichert: `acmp-token-setup.exe` speichert nur einen DPAPI-verschlüsselten Token (`LocalMachine`).
 - `/regresult` (Rückkanal für `acmp_read_registry`) ist bewusst ohne Key erreichbar, weil der Client den Key nicht kennt. Er nimmt nur Ergebnisse zu offenen, nicht ratbaren Tokens an.
 - Sicherheitslücken bitte **nicht** als öffentliches Issue melden, sondern wie in [`SECURITY.md`](SECURITY.md) beschrieben.

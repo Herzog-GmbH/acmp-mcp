@@ -80,7 +80,7 @@ icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:
 Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
-  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1") {
+  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1") {
     Copy-Item (Join-Path $repo $f) $InstallDir -Force
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null
@@ -210,6 +210,37 @@ if ($ask) {
       Write-Hint "Der Dienst laeuft als SYSTEM und meldet sich als Computerkonto '$env:USERDOMAIN\$env:COMPUTERNAME`$' an der DB an."
       Write-Info "Leserecht dafuer einmalig setzen: grant-db-readonly.sql (Platzhalter anpassen, als SQL-Admin ausfuehren)."
     }
+  }
+  $dbNow = $cfg.db -and $cfg.db.connectionString -and "$($cfg.db.connectionString)" -notlike "*HIER_*"
+  $ccActive = $cfg.ccWriter -and $cfg.ccWriter.enabled
+  if ($ccActive) { Write-Ok "CC-Writer aktiv (Client Commands als Entwurf schreiben)" }
+  elseif (Read-YesNo "Client Commands als ENTWURF direkt in die ACMP-Datenbank schreiben (CC-Writer)? Von Aagon nicht vorgesehen" $false) {
+    if (-not $dbNow) { Write-Hint "Braucht zuerst die DB-Report-Tools (Lesezugriff). Diese oben einrichten, dann install.ps1 erneut starten." }
+    else {
+      Write-Info "Vorbereitung (docs\ACMP-VORBEREITUNG.md > 'Client Commands direkt schreiben'):"
+      Write-Info "  1. Datenbank sichern"
+      Write-Info "  2. ACMP-Konsole: Testordner mit eigenen Rechten, darin ein leerer Vorlage-Command ohne Bedingungen"
+      Write-Info "  3. SQL-Login anlegen: grant-cc-writer.sql (Kennwort anpassen, als SQL-Admin ausfuehren)"
+      if (Read-YesNo "Ist das erledigt? Dann jetzt setup-cc-writer.ps1 starten" $false) {
+        if ($changed) { Save-AcmpConfig $cfg $cfgPath; $changed = $false }
+        try { & (Join-Path $InstallDir "setup-cc-writer.ps1") -NoRestart } catch { Write-Bad "setup-cc-writer.ps1: $($_.Exception.Message)" }
+        $cfg = Read-AcmpConfig $cfgPath
+      } else { Write-Info "Spaeter: cd $InstallDir; .\setup-cc-writer.ps1" }
+    }
+  }
+  $ccNow = $cfg.ccWriter -and $cfg.ccWriter.enabled
+  $kioskActive = $cfg.kioskWriter -and $cfg.kioskWriter.enabled
+  if ($kioskActive) { Write-Ok "Kiosk-Writer aktiv (Kiosk-Eintraege und -Ordner pflegen)" }
+  elseif ($ccNow -and (Read-YesNo "Kiosk-Eintraege, -Ordner und Icons direkt in der ACMP-Datenbank pflegen (Kiosk-Writer)? Von Aagon nicht vorgesehen" $false)) {
+    Write-Info "Vorbereitung (docs\ACMP-VORBEREITUNG.md > 'Kiosk pflegen'):"
+    Write-Info "  1. Datenbank sichern"
+    Write-Info "  2. grant-kiosk-writer.sql als SQL-Admin ausfuehren (gleicher Login wie der CC-Writer)"
+    Write-Info "  3. ACMP-Konsole: einen Kiosk-Ordner zum Testen anlegen"
+    if (Read-YesNo "Ist das erledigt? Dann jetzt setup-kiosk-writer.ps1 starten" $false) {
+      if ($changed) { Save-AcmpConfig $cfg $cfgPath; $changed = $false }
+      try { & (Join-Path $InstallDir "setup-kiosk-writer.ps1") -NoRestart } catch { Write-Bad "setup-kiosk-writer.ps1: $($_.Exception.Message)" }
+      $cfg = Read-AcmpConfig $cfgPath
+    } else { Write-Info "Spaeter: cd $InstallDir; .\setup-kiosk-writer.ps1" }
   }
   $smtpActive = $cfg.approval.notify -and $cfg.approval.notify.enabled -and "$($cfg.approval.notify.smtpHost)" -notlike "HIER_*"
   if ($smtpActive) { Write-Ok "E-Mail-Benachrichtigung aktiv" }

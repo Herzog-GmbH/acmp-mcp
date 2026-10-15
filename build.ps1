@@ -19,13 +19,16 @@ $aagonDlls = @("Newtonsoft.Json.dll","Aagon.Sis.Sics.Clients.dll","Aagon.Sis.Sic
 foreach ($d in $aagonDlls) { if (-not (Test-Path (Join-Path $SicsDir $d))) { throw "Aagon-DLL fehlt: $SicsDir\$d  (AESB SICS installiert? Sonst -SicsDir angeben)" } }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-$refs = @("/r:System.dll","/r:System.Core.dll","/r:System.Xml.dll","/r:System.Data.dll","/r:System.Security.dll","/r:$ns")
+$refs = @("/r:System.dll","/r:System.Core.dll","/r:System.Xml.dll","/r:System.Data.dll","/r:System.Security.dll","/r:System.DirectoryServices.dll","/r:System.Drawing.dll","/r:$ns")
 $refs += $aagonDlls | ForEach-Object { "/r:" + (Join-Path $SicsDir $_) }
 
 $serverOut = Join-Path $OutDir $ServerExeName
 Write-Host "Baue $serverOut ..." -ForegroundColor Cyan
 & $csc /nologo /platform:x64 /codepage:65001 /target:exe "/out:$serverOut" @refs `
-  (Join-Path $src "AcmpMcpServer.cs") (Join-Path $src "AcmpConn.cs") (Join-Path $src "AcmpDb.cs") (Join-Path $src "AcmpApproval.cs")
+  (Join-Path $src "AcmpMcpServer.cs") (Join-Path $src "AcmpConn.cs") (Join-Path $src "AcmpDb.cs") (Join-Path $src "AcmpApproval.cs") `
+  (Join-Path $src "AcmpCcFormat.cs") (Join-Path $src "AcmpCcWriter.cs") (Join-Path $src "AcmpCcPreflight.cs") (Join-Path $src "AcmpCtl.cs") `
+  (Join-Path $src "AcmpCcFolders.cs") (Join-Path $src "AcmpCcRelease.cs") `
+  (Join-Path $src "AcmpKiosk.cs") (Join-Path $src "AcmpKioskImages.cs") (Join-Path $src "AcmpKioskUpdate.cs") (Join-Path $src "AcmpKioskGroup.cs")
 if ($LASTEXITCODE -ne 0) { throw "Build AcmpMcpServer fehlgeschlagen (exit $LASTEXITCODE)" }
 
 $tokenOut = Join-Path $OutDir "acmp-token-setup.exe"

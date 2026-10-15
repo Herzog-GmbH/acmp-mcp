@@ -9,6 +9,7 @@ Ein Mensch hat dich gebeten, diesen ACMP-MCP-Server auf seinem ACMP-Server einzu
 - **Konsolen-Einstellungen (ACMP/AESB) kannst du nicht setzen.** Erkläre sie anhand von `docs/ACMP-VORBEREITUNG.md`.
 - **Nichts ins Netz öffnen, bevor ein Bediener existiert.** Der Server lauscht erst nur auf `127.0.0.1`. Der Assistent gibt ihn erst nach dem Anlegen des Administrators frei.
 - Der Server kann Befehle **auf allen verwalteten Endgeräten** ausführen. Schalte die Vier-Augen-Freigabe nicht ab (`approval.enabled`, `approval.bypassAll`), auch nicht „zum Testen“.
+- Den **CC-Writer** (Client Commands direkt in die ACMP-Datenbank schreiben) und den **Kiosk-Writer** richtest du nur ein, wenn der Mensch das ausdrücklich will. Weise ihn darauf hin, dass Aagon das nicht vorsieht und die Datenbank vorher gesichert werden muss. `approvalGate` und `allowUntested` (in `ccWriter` und `kioskWriter`) änderst du nicht.
 
 ## Schritt 0 – Wo bist du?
 Der Server muss **auf dem ACMP-Server** laufen, denn er nutzt die dort installierten Aagon-DLLs.
@@ -61,7 +62,13 @@ Alternativ geht es im Browser über `/onboarding`, mit Login als Freigeber.
 `.\install.ps1 -NonInteractive -SicsUser <Benutzer> -AdminName <kurzname> -AdminEmail <mail>` installiert ohne Rückfragen, braucht dafür aber Admin-Rechte. Das SICS-Passwort liest das Skript aus `$env:ACMP_SICS_PASSWORD`. **Diese Variable setzt der Mensch selbst** in seiner Sitzung, nicht du, und es läuft nie über den Chat. Die Schlussausgabe mit dem API-Key gibst du nicht wieder. Im Zweifel nimm den interaktiven Assistenten.
 
 ## Optionale Funktionen
-Siehe `docs/ACMP-VORBEREITUNG.md` → „Optional“: `acmp_run_powershell` (Client-Command-Vorlage mit `%SCRIPT%`), DB-Report-Tools (`grant-db-readonly.sql`), E-Mail-Benachrichtigung. Jede Option wird in `config.local.json` eingetragen. Das macht der Mensch als Admin, danach Dienst neu starten.
+Siehe `docs/ACMP-VORBEREITUNG.md` → „Optional“: `acmp_run_powershell` (Client-Command-Vorlage mit `%SCRIPT%`), DB-Report-Tools (`grant-db-readonly.sql`), CC-Writer (`grant-cc-writer.sql` + `setup-cc-writer.ps1`, standardmäßig aus), Kiosk-Writer (`grant-kiosk-writer.sql` + `setup-kiosk-writer.ps1`, standardmäßig aus), E-Mail-Benachrichtigung. Jede Option wird in `config.local.json` eingetragen. Das macht der Mensch als Admin, danach Dienst neu starten.
+
+Nach dem Einrichten des CC-Writers rufst du `acmp_cc_writer_status` auf. Steht dort nicht „bestanden“, erklärst du die gesperrte Prüfung anhand der Tabelle in `docs/ACMP-VORBEREITUNG.md`. Das SQL-Kennwort fragt `setup-cc-writer.ps1` selbst verdeckt ab, es läuft nie über den Chat.
+
+Der **Kiosk-Writer** setzt den CC-Writer voraus (gleicher SQL-Login): `grant-kiosk-writer.sql` (SQL-Admin), dann `setup-kiosk-writer.ps1` (Admin). Prüfen mit `acmp_kiosk_tree` und `status: true`.
+
+**Bediener und Schreibrechte:** Der SQL-Login gehört dem Server. Wer die Schreib-Tools (CC-Writer, Kiosk-Writer, `acmp_lib_install`) beantragen darf, steht in `ccWriter.allowedRequesters`. Kommt ein Bediener über `/onboarding` dazu, sag dem Menschen, dass er ihn mit `.\setup-cc-writer.ps1 -AddRequester <kurzname>` freischalten muss, wenn die Person schreiben soll. `add-user.ps1` fragt das selbst ab.
 
 ## Aktualisieren
 ```powershell
