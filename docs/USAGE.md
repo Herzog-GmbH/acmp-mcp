@@ -45,7 +45,7 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 - „Bau mir einen Client Command, der den Druckerwarteschlangen-Dienst neu startet, als Entwurf im Ordner ‚MCP Entwürfe‘." → `acmp_cc_create_draft` (Freigabe-Anfrage mit allen Schritten)
 - „Häng die Datei `\\server\software\setup.msi` an den Entwurf." → `acmp_cc_add_file`
 - „Gib den Entwurf frei." → `acmp_cc_release` (immer mit Freigabe-Anfrage)
-- „Im Command ‚Druckertreiber installieren‘ fehlt der Exit-Code-Check, bau das als neue Version ein." → `acmp_cc_decode`, dann `acmp_cc_new_version` (Vorschau mit den Änderungen; freigeben danach in der Konsole)
+- „Im Command ‚Druckertreiber installieren‘ fehlt der Exit-Code-Check, bau das als neue Version ein." → `acmp_cc_decode`, dann `acmp_cc_new_version` (Vorschau mit den Änderungen), danach `acmp_cc_release` („Gib die neue Version frei.“)
 - „Leg unter ‚Software‘ einen Ordner ‚Office‘ an und verschieb alle Office-Commands dorthin." → `acmp_cc_add_folder`, `acmp_cc_move`
 
 ## 6) Kiosk (optional, Kiosk-Writer)

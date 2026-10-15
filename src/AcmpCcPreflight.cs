@@ -371,7 +371,7 @@ static class AcmpCcPreflight
         if (!HasPerm(wc, "SYS_SCRIPT_FILES", "SELECT")) miss.Add("SYS_SCRIPT_FILES SELECT");
         foreach (string[] p in ReleaseColumns) if (!HasColumnPerm(wc, p[0], p[1], "UPDATE")) miss.Add(p[0] + "." + p[1] + " UPDATE");
         ok = miss.Count == 0;
-        if (ok) Add(checks, "Freigeben", "ok", "UPDATE auf SYS_SCRIPTS.State/IsFileRepoVersionIncreased/FileRepoSize und SELECT auf SYS_SCRIPT_FILES vorhanden (acmp_cc_release, nur Commands mit einer Version)");
+        if (ok) Add(checks, "Freigeben", "ok", "UPDATE auf SYS_SCRIPTS.State/IsFileRepoVersionIncreased/FileRepoSize und SELECT auf SYS_SCRIPT_FILES vorhanden (acmp_cc_release, bei Folgeversionen auch alte Version State 7 -> 8)");
         else Add(checks, "Freigeben", "warn", "Rechte fehlen: " + string.Join(", ", miss.ToArray()) + " - acmp_cc_release gesperrt");
     }
 

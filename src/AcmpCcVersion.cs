@@ -6,7 +6,7 @@
 //    Alle uebrigen Spalten wie die alte Version (PASSWORD, FOLDERID, CONDITIONS, Flags, FileRepoVersion, MaxUsedFileRepoVersion,
 //    FileRepoSize - "7-Zip" v4 als Entwurf mit FileRepoSize 1941 wie v3). Variablen je Version in SYS_SCRIPTS_VARIABLES.
 //    Rechte (SYS_AccessControl_*) haengen an der ScriptId, Dateien (SYS_SCRIPT_FILES) an der FileRepoVersion: beides bleibt.
-//  - Die freigegebene Version laeuft weiter, bis die neue in der Console freigegeben wird (dann alte Version -> State 8).
+//  - Die freigegebene Version laeuft weiter, bis die neue freigegeben wird (Console oder acmp_cc_release; dann alte Version -> State 8).
 //  - Liegt schon ein Entwurf vor, oeffnet und speichert die Console diesen Entwurf (keine weitere Version).
 // Regeln: nicht in Aagon-Standardordnern (StrucLevel 0), optional nur in ccWriter.versionScopeFolderIds; eigene MCP-Entwuerfe weiter mit
 // acmp_cc_update_draft; einen fremden Entwurf nur mit replaceDraft=true ueberschreiben (Sicherung, zurueck mit acmp_cc_restore_draft);
@@ -395,7 +395,7 @@ partial class AcmpCcWriter
                 head.Add("NEUE VERSION v" + newVer + " von " + label + " als ENTWURF anlegen (State 1, Predecessor v" + top.Version + ") - wie Speichern in der ACMP-Console.");
             else
                 head.Add("Vorhandenen ENTWURF " + draftInfo + " von " + label + " UEBERSCHREIBEN - vorher Sicherung, zurueck mit acmp_cc_restore_draft.");
-            head.Add("Ordner \"" + p["folderPath"] + "\". Auf Clients laeuft weiter " + relText + ", bis v" + newVer + " in der ACMP-Console freigegeben wird (acmp_cc_release gibt nur v1 frei).");
+            head.Add("Ordner \"" + p["folderPath"] + "\". Auf Clients laeuft weiter " + relText + ", bis v" + newVer + " freigegeben wird (acmp_cc_release oder ACMP-Console).");
             head.Add("Uebernommen aus v" + top.Version + ": Name, Ordner, Rechte, Bedingungen, Kennwort-Hash des Commands, angehaengte Dateien (FileRepoVersion " + top.FileRepoVersion + ", " + files + " Datei(en)), Aenderungsprotokoll" +
                      (varsFromBase ? ", Variablen" : "") + (longDesc == null ? ", Beschreibung" : "") + ".");
             if (longDesc != null) head.Add("Neue Beschreibung: " + OneLine(longDesc, 300));
@@ -548,8 +548,8 @@ partial class AcmpCcWriter
         var o = new JObject();
         o["sicherung"] = bn;
         o["ok"] = true; o["scriptId"] = id; o["name"] = p["name"]; o["version"] = newVer; o["modus"] = mode == "insert" ? "neue Version angelegt" : "Entwurf ueberschrieben";
-        o["hinweis"] = "v" + newVer + " ist ein ENTWURF (State 1). Auf Clients laeuft weiter die freigegebene Version. In der ACMP-Console pruefen (F5) und freigeben; " +
-                       "dabei wird die alte Version abgeloest (State 8). acmp_cc_release gibt nur Commands mit einer Version frei." +
+        o["hinweis"] = "v" + newVer + " ist ein ENTWURF (State 1). Auf Clients laeuft weiter die freigegebene Version. Freigeben mit acmp_cc_release (erst dryRun=true) oder in der ACMP-Console; " +
+                       "dabei wird die alte Version abgeloest (State 8)." +
                        (mode == "replace" ? " Zurueck zum vorherigen Entwurf: acmp_cc_restore_draft backup=\"" + bn + "\"." : "");
         return o;
     }

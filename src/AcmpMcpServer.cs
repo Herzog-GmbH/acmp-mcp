@@ -193,7 +193,7 @@ static class AcmpMcp
                 string rNote = "";
                 foreach (JObject ck in (JArray)pf["checks"]) if ((string)ck["check"] == "Freigeben" && (string)ck["result"] != "ok") rNote = (string)ck["detail"];
                 Log("CC-Freigabe (acmp_cc_release): " + (pf["releaseTool"] != null && (bool)pf["releaseTool"]
-                    ? (CCW.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll)" : "GESPERRT - ccWriter.approvalGate=false (Freigeben nur mit Gate)")
+                    ? (CCW.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll; auch Folgeversionen v2+, alte Version State 8)" : "GESPERRT - ccWriter.approvalGate=false (Freigeben nur mit Gate)")
                     : "GESPERRT - " + (rNote.Length > 0 ? rNote : "Kompatibilitaetspruefung")));
                 Log("CC-Version (acmp_cc_new_version): " + ((bool)pf["ok"]
                     ? (CCW.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll; " + (CCW.VersionScope.Count > 0 ? "nur in " + string.Join(", ", new List<string>(CCW.VersionScope).ToArray()) : "alle Ordner ausser Aagon-Standardordnern") + ")"
@@ -501,7 +501,7 @@ static class AcmpMcp
                     "- Container: acmp_create_container/acmp_save_containers/acmp_delete_containers\n" +
                     "- Lizenzen/Einstellungen: acmp_get_licenses / acmp_get_app_settings / acmp_get_master_data_settings / acmp_get_custom_field_list\n" +
                     "- Schwachstellen/Updates/Inventar (DB-Reports): acmp_outdated_software / acmp_missing_updates / acmp_software_search\n" +
-                    "- Schritte eines Client Commands lesen: acmp_cc_decode ; welche Schrittklassen/Felder es gibt: acmp_cc_catalog ; neuen Client Command als Entwurf anlegen/aendern: acmp_cc_create_draft / acmp_cc_update_draft (falls freigeschaltet) ; vom MCP angelegte Entwuerfe freigeben, auch mehrere in einem Auftrag: acmp_cc_release (erst dryRun=true, Vorschau dem Menschen zeigen; laeuft immer ueber die Freigabe-Seite) ; vorhandenen (auch freigegebenen oder fremden) Command aendern = neue Version als Entwurf: acmp_cc_new_version (Ausgabe von acmp_cc_decode als steps, nur betroffene Schritte aendern; erst dryRun=true, Vorschau zeigt die Aenderungen; laeuft immer ueber die Freigabe-Seite; freigeben danach in der Console)\n" +
+                    "- Schritte eines Client Commands lesen: acmp_cc_decode ; welche Schrittklassen/Felder es gibt: acmp_cc_catalog ; neuen Client Command als Entwurf anlegen/aendern: acmp_cc_create_draft / acmp_cc_update_draft (falls freigeschaltet) ; Entwuerfe freigeben (eigene MCP-Entwuerfe und neue Versionen aus acmp_cc_new_version, bei Folgeversionen wird die alte Version abgeloest), auch mehrere in einem Auftrag: acmp_cc_release (erst dryRun=true, Vorschau dem Menschen zeigen; laeuft immer ueber die Freigabe-Seite) ; vorhandenen (auch freigegebenen oder fremden) Command aendern = neue Version als Entwurf: acmp_cc_new_version (Ausgabe von acmp_cc_decode als steps, nur betroffene Schritte aendern; erst dryRun=true, Vorschau zeigt die Aenderungen; laeuft immer ueber die Freigabe-Seite; freigeben danach mit acmp_cc_release)\n" +
                     "- Client-Command-Ordner: Baum mit GUIDs und Anzahl acmp_cc_folders (commands=true listet die Commands) ; Commands in andere Ordner verschieben, auch viele in einem Auftrag, acmp_cc_move (zurueck mit undo) ; neue Ordner anlegen, auch mehrere samt Unterordnern in einem Auftrag, acmp_cc_add_folder ; Ordner umbenennen/verschieben acmp_cc_update_folder (zurueck mit undo) (alle erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
                     "- Vorlage aus der ACMP CTL (Community Template Library) als Entwurf installieren: acmp_lib_install (erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
                     "- ACMP-Kiosk: Ordner, Eintraege und Sichtbarkeitsfilter lesen acmp_kiosk_tree ; Ordner anlegen acmp_kiosk_add_group ; Ordner umbenennen (DE/EN), Ordner-Icon/-Filter aendern acmp_kiosk_update_group ; Eintrag anlegen acmp_kiosk_add_item ; Eintraege verschieben/umbenennen/Beschreibung/Icon/Filter aendern, auch viele in einem Auftrag, acmp_kiosk_update_items ; Filter setzen/entfernen acmp_kiosk_set_filter ; Eintrag entfernen acmp_kiosk_remove_item ; zurueck acmp_kiosk_restore (add_group/update_group/add_item/update_items/set_filter erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
@@ -1256,12 +1256,14 @@ static class AcmpMcp
             JObject rli = Prop("array", AcmpCcWriter.ReleaseHelp);
             rli["items"] = new JObject(new JProperty("type", "string"));
             rl["scriptIds"] = rli;
-            rl["scriptId"] = Prop("string", "Einzeln statt scriptIds: ScriptId-GUID (oder eindeutiger Name) eines vom MCP angelegten Entwurfs.");
+            rl["scriptId"] = Prop("string", "Einzeln statt scriptIds: ScriptId-GUID (oder eindeutiger Name) eines vom MCP angelegten Entwurfs oder eines Commands mit neuer Version aus acmp_cc_new_version.");
             rl["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (je Command Ordner, Schritte, Dateien, FileRepoSize, Hinweise), nichts freigeben. Vor jeder Anfrage empfohlen.");
             rl["details"] = Prop("boolean", "Nur mit dryRun: auch den Inhalt jedes Commands (Variablen, Schritte mit Feldern) zeigen. Standard aus, weil viele Commands sehr lang werden; die Freigabeseite zeigt den Inhalt immer.");
             rl["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
             tools.Add(Tool("acmp_cc_release",
-                "Gibt vom MCP angelegte Client-Command-ENTWUERFE frei (wie 'Freigeben' in der ACMP-Console): State 1 -> 7, IsFileRepoVersionIncreased -> False, FileRepoSize aus den angehaengten Dateien; danach per Kiosk/Job ausfuehrbar. Nur eigene Entwuerfe (cc-drafts.json) mit genau einer Version; Platzhalter wie 'HIER ... EINTRAGEN' sperren. Mehrere Commands in einem Auftrag = eine Freigabe, eine Transaktion, vorher Sicherung. " +
+                "Gibt Client-Command-ENTWUERFE frei (wie 'Freigeben' in der ACMP-Console): neueste Version State 1 -> 7, IsFileRepoVersionIncreased -> False, FileRepoSize aus den angehaengten Dateien; bei einer Folgeversion (v2+) wird die bisher freigegebene Version abgeloest (State 7 -> 8). Danach per Kiosk/Job ausfuehrbar. " +
+                "Erlaubt: eigene MCP-Entwuerfe (cc-drafts.json) und fremde Commands, deren neueste Version zuletzt der MCP gespeichert hat (acmp_cc_new_version), nicht in Aagon-Standardordnern" +
+                (CCW.VersionScope.Count > 0 ? " und nur innerhalb von ccWriter.versionScopeFolderIds" : "") + ". Folgeversionen mit geaenderten Dateien und Platzhalter wie 'HIER ... EINTRAGEN' sperren. Mehrere Commands in einem Auftrag = eine Freigabe, eine Transaktion, vorher Sicherung; die Vorschau zeigt bei Folgeversionen die Aenderungen gegenueber der freigegebenen Version. " +
                 "Laeuft IMMER ueber die Vier-Augen-Freigabe (auch wenn andere Tools sie gerade ueberspringen): die Anfrage friert Inhalt (SHA-256) und Dateien ein; hat sich bis zur Zustimmung etwas geaendert, wird nichts freigegeben. Zuruecknehmen kann das Tool eine Freigabe nicht.",
                 rl, null));
             var nv = new JObject();
@@ -1276,7 +1278,7 @@ static class AcmpMcp
             tools.Add(Tool("acmp_cc_new_version",
                 "Legt eine NEUE VERSION eines vorhandenen Client Commands als ENTWURF an - wie Speichern eines freigegebenen Commands in der ACMP-Console: neue Zeile mit ScriptVersion+1, State 1, Predecessor = alte Version; Name, Ordner, Rechte, Bedingungen und angehaengte Dateien bleiben. Auch fuer freigegebene und fremde Commands, nicht in Aagon-Standardordnern" +
                 (CCW.VersionScope.Count > 0 ? " und nur innerhalb von ccWriter.versionScopeFolderIds" : "") + ". " +
-                "Auf Clients laeuft weiter die freigegebene Version, bis die neue in der ACMP-Console freigegeben wird (acmp_cc_release gibt nur v1 frei). Gibt es schon einen Entwurf eines anderen Bearbeiters, nur mit replaceDraft=true. Eigene MCP-Entwuerfe weiter mit acmp_cc_update_draft. " +
+                "Auf Clients laeuft weiter die freigegebene Version, bis die neue freigegeben wird (acmp_cc_release oder ACMP-Console). Gibt es schon einen Entwurf eines anderen Bearbeiters, nur mit replaceDraft=true. Eigene MCP-Entwuerfe weiter mit acmp_cc_update_draft. " +
                 "Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Vorschau zeigt die Aenderungen gegenueber der freigegebenen Version, die Anfrage friert Basis und neuen Inhalt (SHA-256) ein.",
                 nv, new[] { "scriptId", "steps" }));
         }
@@ -1412,7 +1414,7 @@ static class AcmpMcp
             ", acmp_cc_update_folder " + (pf["folderEditTool"] != null && (bool)pf["folderEditTool"] ? "aktiv" : "gesperrt (Pruefung 'Ordner aendern')");
         o["freigabeTool"] = "acmp_cc_release " + (pf["releaseTool"] == null || !(bool)pf["releaseTool"] ? "gesperrt (Pruefung 'Freigeben')"
             : !CcReleaseGateAvailable() ? "gesperrt (nur mit Vier-Augen-Freigabe: approval-Section und ccWriter.approvalGate)"
-            : "aktiv (immer ueber die Vier-Augen-Freigabe, mind. 1 Zustimmung, auch bei bypassAll)");
+            : "aktiv (immer ueber die Vier-Augen-Freigabe, mind. 1 Zustimmung, auch bei bypassAll; auch Folgeversionen v2+ und vom MCP gespeicherte Versionen fremder Commands)");
         o["versionTool"] = "acmp_cc_new_version " + (!(bool)pf["ok"] ? "gesperrt (Kompatibilitaetspruefung)"
             : !CcReleaseGateAvailable() ? "gesperrt (nur mit Vier-Augen-Freigabe: approval-Section und ccWriter.approvalGate)"
             : "aktiv (immer ueber die Vier-Augen-Freigabe, mind. 1 Zustimmung, auch bei bypassAll)");
