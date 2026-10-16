@@ -31,6 +31,7 @@ Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** 
 - **Pro Bediener:** eigener API-Key und optional eigene ACMP-Identität. ACMP prüft dann die echten Rechte der Person.
 - **Eine EXE, keine Cloud:** läuft direkt auf dem ACMP-Server. Kein IIS, kein .NET-SDK.
 - **Optional:** Client Commands anlegen, freigeben und einsortieren sowie den **Kiosk** pflegen, direkt in der ACMP-Datenbank. Standardmäßig aus.
+- **Fertige Vorlagen:** In der [ACMP CTL](https://herzog-gmbh.github.io/acmp-ctl/) (Community Template Library) liegen Client-Command-Vorlagen mit jedem Schritt im Klartext. `acmp_lib_install` legt sie als Entwurf in eurer Console an.
 
 ## Kompatibilität
 
@@ -265,7 +266,7 @@ Die Public API kann Client Commands nur starten, nicht anlegen. Diese Tools lese
 | 🟡 | `acmp_cc_release` *(CW)* | Entwürfe freigeben wie in der Konsole, mehrere in einem Auftrag: eigene neue Commands und neue Versionen aus `acmp_cc_new_version` (die bisher freigegebene Version wird dabei abgelöst). Läuft **immer** über die Freigabe-Seite, auch wenn sie sonst abgeschaltet ist |
 | 🟡 | `acmp_cc_move` *(CW)* | viele Commands in einem Auftrag in andere Ordner verschieben, mit `undo` |
 | 🟡 | `acmp_cc_add_folder`, `acmp_cc_update_folder` *(CW)* | Ordner anlegen (Rechte wie der Elternordner), umbenennen oder verschieben |
-| 🟡 | `acmp_lib_install` *(DB, CW)* | Vorlage aus der ACMP CTL (Community Template Library, Repo folgt) oder einem eigenen Vorlagen-Ordner als Entwurf installieren. Mit `dryRun` 🟢 auch ohne Writer |
+| 🟡 | `acmp_lib_install` *(DB, CW)* | Vorlage aus der [ACMP CTL](https://herzog-gmbh.github.io/acmp-ctl/) (Community Template Library) oder einem eigenen Vorlagen-Ordner als Entwurf installieren. Mit `dryRun` 🟢 auch ohne Writer |
 
 Der Writer ändert nur eigene Entwürfe im erlaubten Ordner und nur für erlaubte Bediener. Vorhandene Commands fasst er nur über `acmp_cc_new_version` an: als neue Version, nie in Aagon-Standardordnern, Schritt-IDs und gespeicherte Kennwörter bleiben erhalten, einen fremden Entwurf überschreibt er nur auf ausdrücklichen Wunsch (mit Sicherung). Jede Schreibaktion läuft über die Freigabe-Seite, die Vorschau zeigt jeden Schritt mit seinen Feldern.
 
@@ -378,7 +379,7 @@ Die Anmeldung läuft über ein eigenes Token pro Freigeber und ist **unabhängig
 | `helpdesk.createdStateId` | optional, Ticketstatus für neue Tickets |
 | `ccWriter.*` | optional, standardmäßig aus: Client Commands als Entwurf schreiben, freigeben, einsortieren. Einrichten mit `setup-cc-writer.ps1`, weitere Bediener mit `setup-cc-writer.ps1 -AddRequester <name>` |
 | `kioskWriter.*` | optional, standardmäßig aus: Kiosk pflegen. Setzt den CC-Writer voraus (gleicher SQL-Login). Einrichten mit `setup-kiosk-writer.ps1` |
-| `ctl.sources` | optional, Quellen für `acmp_lib_install`. Standard: Ordner `ctl` im Installationsordner, dann das Repo `Herzog-GmbH/acmp-ctl` (folgt) |
+| `ctl.sources` | optional, Quellen für `acmp_lib_install`. Standard: Ordner `ctl` im Installationsordner, dann das Repo [`Herzog-GmbH/acmp-ctl`](https://github.com/Herzog-GmbH/acmp-ctl) |
 
 </details>
 

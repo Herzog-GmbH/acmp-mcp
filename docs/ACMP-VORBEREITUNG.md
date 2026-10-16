@@ -81,7 +81,7 @@ Fällt die Prüfung durch, nennt `acmp_cc_writer_status` den Grund:
 | File Repository nicht gefunden | nur die Datei-Tools sind gesperrt. `ccWriter.fileRepositoryRoot` korrigieren |
 
 #### Vorlagen aus der ACMP CTL
-`acmp_lib_install` installiert Vorlagen aus der ACMP CTL (Community Template Library) als Entwurf, über den CC-Writer und dieselbe Freigabe. Mit `dryRun: true` zeigt es ohne Writer, was angelegt würde. Quellen stehen in `ctl.sources`. Standard ist erst der Ordner `ctl` im Installationsordner (`templates\<id>\template.json`), dann das Repo `Herzog-GmbH/acmp-ctl`. Das öffentliche Vorlagen-Repo folgt, bis dahin funktionieren eigene Vorlagen im Ordner `ctl`.
+`acmp_lib_install` installiert Vorlagen aus der ACMP CTL (Community Template Library) als Entwurf, über den CC-Writer und dieselbe Freigabe. Mit `dryRun: true` zeigt es ohne Writer, was angelegt würde. Quellen stehen in `ctl.sources`. Standard ist erst der Ordner `ctl` im Installationsordner (`templates\<id>\template.json`), dann das Repo [`Herzog-GmbH/acmp-ctl`](https://github.com/Herzog-GmbH/acmp-ctl). Alle Vorlagen samt Schritten und Skripten könnt ihr vorher auf https://herzog-gmbh.github.io/acmp-ctl/ lesen. Eigene Vorlagen legt ihr im Ordner `ctl` ab.
 
 ### Kiosk pflegen (Kiosk-Writer)
 Auch den Kiosk kann die Public API nicht pflegen. Der Kiosk-Writer legt deshalb Einträge, Ordner, Sichtbarkeitsfilter und Icons direkt in der ACMP-Datenbank an. Lesen (`acmp_kiosk_tree`, `acmp_kiosk_images`) geht schon mit den DB-Report-Tools.
