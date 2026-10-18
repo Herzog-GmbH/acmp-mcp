@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Herzog-GmbH/acmp-mcp",
-  "title": "Aagon ACMP",
-  "description": "Aagon ACMP client management with four-eyes approval: clients, inventory, CVEs, jobs, tickets",
+  "title": "ACMP MCP Server",
+  "description": "Community MCP server for Aagon ACMP: clients, inventory, CVEs, jobs, tickets, four-eyes approval",
   "repository": {
     "url": "https://github.com/Herzog-GmbH/acmp-mcp",
     "source": "github"
