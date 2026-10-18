@@ -233,7 +233,11 @@ function Show-ClientConfig([int]$choice, [string]$url, [string]$key) {
   switch ($choice) {
     1 { Write-Info "Auf DEINEM PC in einem Terminal ausfuehren:"
         Write-Host "  claude mcp add --transport http acmp $u --header `"Authorization: Bearer $key`" --scope user" -ForegroundColor White }
-    2 { Write-Info "In claude_desktop_config.json (Einstellungen > Entwickler > Konfiguration bearbeiten), braucht Node.js:"
+    2 { Write-Info "Am einfachsten als Erweiterung: acmp-mcp-<version>.mcpb aus den GitHub-Releases"
+        Write-Info "(https://github.com/Herzog-GmbH/acmp-mcp/releases) per Doppelklick installieren und eintragen:"
+        Write-Host "  Server-Adresse: $u" -ForegroundColor White
+        Write-Host "  API-Key:        $key" -ForegroundColor White
+        Write-Info "Ohne Erweiterung: in claude_desktop_config.json (Einstellungen > Entwickler > Konfiguration bearbeiten), braucht Node.js:"
         Write-Host @"
   {
     "mcpServers": {

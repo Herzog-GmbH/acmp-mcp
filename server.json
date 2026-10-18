@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Herzog-GmbH/acmp-mcp",
+  "title": "Aagon ACMP",
+  "description": "Aagon ACMP client management with four-eyes approval: clients, inventory, CVEs, jobs, tickets",
+  "repository": {
+    "url": "https://github.com/Herzog-GmbH/acmp-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/Herzog-GmbH/acmp-mcp",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/Herzog-GmbH/acmp-mcp/releases/download/mcpb-v1.0.0/acmp-mcp-1.0.0.mcpb",
+      "fileSha256": "2f6db3ca3edca7932bf695c6cdb5822f1f995a4bedb8f14589d9f1d5e95ff30a",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

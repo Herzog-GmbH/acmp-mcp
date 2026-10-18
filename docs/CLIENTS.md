@@ -17,6 +17,19 @@ claude mcp add --transport http acmp http://<HOST>:8765/ --header "Authorization
 ```
 
 ## Claude Desktop
+
+### Als Erweiterung (empfohlen)
+
+1. `acmp-mcp-<version>.mcpb` aus den [Releases](https://github.com/Herzog-GmbH/acmp-mcp/releases) laden.
+2. Doppelklick auf die Datei, oder in Claude Desktop unter **Einstellungen → Erweiterungen** hineinziehen, dann „Installieren“.
+3. In den Einstellungen der Erweiterung **Server-Adresse** (`http://<HOST>:8765/`) und **API-Key** eintragen. Den Key legt Claude Desktop im Schlüsselbund des Betriebssystems ab.
+
+Die Erweiterung ist nur eine kleine Brücke ohne Abhängigkeiten und nutzt das Node.js, das Claude Desktop mitbringt. Der Server selbst läuft weiter auf dem ACMP-Server. Fehlen Adresse oder Key, ist der Key falsch oder der Server nicht erreichbar, steht das als Meldung im Chat. Wer HTTPS über einen eigenen TLS-Proxy mit interner Zertifizierungsstelle nutzt, hinterlegt dort zusätzlich das Stammzertifikat (PEM).
+
+Selbst bauen: `powershell -NoProfile -ExecutionPolicy Bypass -File mcpb\build-mcpb.ps1` (Windows PowerShell 5.1, legt `dist\acmp-mcp-<version>.mcpb` an). Testen ohne Claude Desktop: `mcpb\test-mcpb.py`, Aufruf steht im Kopf der Datei. Änderungen: [`mcpb/CHANGELOG.md`](../mcpb/CHANGELOG.md).
+
+### Ohne Erweiterung
+
 `claude_desktop_config.json`, über die Brücke `mcp-remote` (braucht Node.js). `--allow-http` ist nötig, weil der Server kein TLS spricht:
 ```json
 {

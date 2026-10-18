@@ -1,0 +1,79 @@
+{
+  "manifest_version": "0.3",
+  "name": "acmp-mcp",
+  "display_name": "ACMP-MCP-Server",
+  "version": "1.0.0",
+  "description": "Aagon ACMP für die KI: Clients, Inventar, Schwachstellen, Jobs, Tickets und Assets, mit Vier-Augen-Freigabe für alles, was etwas verändert.",
+  "long_description": "Verbindet Claude Desktop mit eurem **ACMP-MCP-Server** für die Public API von **Aagon ACMP**. Ihr fragt in normaler Sprache, zum Beispiel „Welche Rechner waren seit 30 Tagen offline?“, und die KI holt sich die Antwort direkt aus ACMP.\n\n**Diese Erweiterung ist nur die Verbindung.** Den Server selbst richtet ihr einmal auf dem ACMP-Server ein (`install.ps1`, siehe README im Repo). Am Ende zeigt der Assistent die Server-Adresse und euren persönlichen API-Key, beides tragt ihr hier in den Einstellungen ein. Weitere Kolleg:innen bekommen ihren Key über `add-user.ps1` oder die Seite `/onboarding` des Servers.\n\n**Vier-Augen-Freigabe:** Lesen läuft sofort. Alles, was etwas verändert, ausführt oder löscht, landet erst als Antrag auf der Freigabe-Seite des Servers und läuft erst, wenn genug verschiedene Personen im Browser zugestimmt haben.\n\n**Sicherheit:** Der API-Key wird im Schlüsselbund des Betriebssystems gespeichert. Der Server bringt kein TLS mit; im LAN beschränkt ihr per Firewall die Quell-Subnetze, über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor. Für HTTPS mit interner Zertifizierungsstelle kann das Stammzertifikat in den Einstellungen hinterlegt werden.\n\nKein Produkt der Aagon GmbH. ACMP und AESB sind Marken der Aagon GmbH.",
+  "author": {
+    "name": "Herzog-GmbH",
+    "url": "https://github.com/Herzog-GmbH"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Herzog-GmbH/acmp-mcp.git"
+  },
+  "homepage": "https://github.com/Herzog-GmbH/acmp-mcp",
+  "documentation": "https://github.com/Herzog-GmbH/acmp-mcp#readme",
+  "support": "https://github.com/Herzog-GmbH/acmp-mcp/issues",
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": ["acmp", "aagon", "client management", "endpoint management", "helpdesk", "inventory", "vulnerabilities", "four-eyes approval"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "ACMP_MCP_URL": "${user_config.server_url}",
+        "ACMP_MCP_KEY": "${user_config.api_key}",
+        "ACMP_MCP_CA_FILE": "${user_config.ca_file}"
+      }
+    }
+  },
+  "user_config": {
+    "server_url": {
+      "type": "string",
+      "title": "Server-Adresse",
+      "description": "Adresse des ACMP-MCP-Servers, z. B. http://acmp.example.local:8765/ (Port 8765, wenn bei der Installation nichts anderes gewählt wurde).",
+      "required": true
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API-Key",
+      "description": "Persönlicher API-Key aus install.ps1, add-user.ps1 oder der Seite /onboarding des Servers. Wie ein Admin-Passwort behandeln.",
+      "sensitive": true,
+      "required": true
+    },
+    "ca_file": {
+      "type": "file",
+      "title": "Stammzertifikat (optional)",
+      "description": "Nur für HTTPS über einen eigenen TLS-Proxy mit interner Zertifizierungsstelle: Stammzertifikat als PEM-Datei.",
+      "required": false
+    }
+  },
+  "tools": [
+    { "name": "acmp_whoami", "description": "Mit welchem ACMP-Benutzer und welchen Rechten man arbeitet" },
+    { "name": "acmp_get_clients", "description": "Rechner auflisten" },
+    { "name": "acmp_get_client_id", "description": "Rechner per Name oder MAC finden" },
+    { "name": "acmp_get_os_info", "description": "Betriebssystem und zuletzt angemeldeter Benutzer" },
+    { "name": "acmp_get_hardware", "description": "CPU, RAM, Platten, Dienste" },
+    { "name": "acmp_get_software", "description": "Installierte Software eines Rechners" },
+    { "name": "acmp_missing_updates", "description": "Fehlende Windows-Updates" },
+    { "name": "acmp_vulnerabilities", "description": "Schwachstellen (CVEs) mit Score" },
+    { "name": "acmp_get_tickets", "description": "Helpdesk-Tickets lesen" },
+    { "name": "acmp_create_ticket", "description": "Ticket anlegen (mit Freigabe)" },
+    { "name": "acmp_enqueue_client_command", "description": "Vorhandenen Client Command starten (mit Freigabe)" },
+    { "name": "acmp_run_powershell", "description": "PowerShell als SYSTEM auf einem Client (Freigabe durch zwei Personen)" },
+    { "name": "acmp_approval_status", "description": "Stand eines Freigabe-Antrags" },
+    { "name": "acmp_call", "description": "Jedes der 167 Public-API-Kommandos ohne eigenes Tool" }
+  ],
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": ["win32", "darwin", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

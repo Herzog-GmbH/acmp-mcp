@@ -41,7 +41,7 @@ Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** 
 | **CC-Writer / Kiosk-Writer** | ACMP 6.10. Bei Abweichungen, etwa nach einem ACMP-Update, sperrt die Vorprüfung das Schreiben |
 | **Server** | Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server |
 | **MCP** | Streamable HTTP (JSON-RPC 2.0), Protokollversion `2025-06-18` |
-| **KI-Clients** | Vorlagen für Claude Code, Claude Desktop, Codex CLI, VS Code/GitHub Copilot, Cursor und Gemini CLI in [`docs/CLIENTS.md`](docs/CLIENTS.md) |
+| **KI-Clients** | Vorlagen für Claude Code, Claude Desktop (auch als Erweiterung `.mcpb`), Codex CLI, VS Code/GitHub Copilot, Cursor und Gemini CLI in [`docs/CLIENTS.md`](docs/CLIENTS.md) |
 
 ## Schnellstart
 
@@ -120,6 +120,8 @@ Zum Beispiel Claude Code:
 ```bash
 claude mcp add --transport http acmp http://<HOST>:8765/ --header "Authorization: Bearer <KEY>" --scope user
 ```
+
+**Claude Desktop:** `acmp-mcp-<version>.mcpb` aus den [Releases](https://github.com/Herzog-GmbH/acmp-mcp/releases) per Doppelklick installieren, dann Server-Adresse und API-Key in den Einstellungen der Erweiterung eintragen.
 
 Fertige Konfigurationen für alle gängigen Clients stehen in [`docs/CLIENTS.md`](docs/CLIENTS.md). Clients, die nur lokale (stdio) Server kennen, binden ihr über die Brücke `mcp-remote` an.
 
