@@ -998,7 +998,19 @@ class AcmpApproval
         string url = Esc(_publicUrl) + "/", k = Esc(key);
         sb.Append("<p><b>Jeder MCP-Client</b> (Streamable HTTP): URL <code>").Append(url).Append("</code>, Header <code>Authorization: Bearer ").Append(k).Append("</code>. Vorlagen für Codex, VS Code/Copilot, Cursor, Gemini u. a.: <code>docs/CLIENTS.md</code> im Repo.</p>");
         sb.Append("<p><b>Claude Code (CLI):</b></p><pre>claude mcp add --transport http acmp ").Append(url).Append(" --header \"Authorization: Bearer ").Append(k).Append("\" --scope user</pre>");
-        sb.Append("<p><b>Claude Desktop / Clients nur mit stdio</b> (Brücke mcp-remote, braucht Node.js):</p><pre>{\n  \"mcpServers\": {\n    \"acmp\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"").Append(url).Append("\", \"--header\", \"Authorization: Bearer ").Append(k).Append("\", \"--allow-http\"]\n    }\n  }\n}</pre>");
+        AppendClaudeDesktopSnippet(sb, url, k);
+    }
+
+    // Claude Desktop: zuerst die Erweiterung (.mcpb aus den Releases), mcp-remote nur noch als Weg ohne Erweiterung.
+    // url und k kommen bereits maskiert (Esc).
+    static void AppendClaudeDesktopSnippet(StringBuilder sb, string url, string k)
+    {
+        sb.Append("<p><b>Claude Desktop</b>, am einfachsten als Erweiterung:</p><ol class=\"steps\">");
+        sb.Append("<li><code>acmp-mcp-&lt;version&gt;.mcpb</code> aus den <a href=\"https://github.com/Herzog-GmbH/acmp-mcp/releases\" target=\"_blank\" rel=\"noopener\">GitHub-Releases</a> laden.</li>");
+        sb.Append("<li>Doppelklick auf die Datei (oder in Claude Desktop unter <b>Einstellungen → Erweiterungen</b> hineinziehen), dann „Installieren“.</li>");
+        sb.Append("<li>In den Einstellungen der Erweiterung eintragen: <b>Server-Adresse</b> <code>").Append(url).Append("</code> und <b>API-Key</b> <code>").Append(k).Append("</code>. Das Feld <b>Stammzertifikat</b> bleibt leer (nur für HTTPS über einen eigenen TLS-Proxy).</li>");
+        sb.Append("<li>Den Schalter <b>Aktiviert</b> einschalten.</li></ol>");
+        sb.Append("<p><b>Ohne Erweiterung</b> (auch für andere Clients nur mit stdio): in <code>claude_desktop_config.json</code> über die Brücke mcp-remote, braucht Node.js:</p><pre>{\n  \"mcpServers\": {\n    \"acmp\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"").Append(url).Append("\", \"--header\", \"Authorization: Bearer ").Append(k).Append("\", \"--allow-http\"]\n    }\n  }\n}</pre>");
     }
 
     static string Esc(string s)
