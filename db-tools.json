@@ -316,6 +316,44 @@
                  ]
     },
     {
+        "name":  "acmp_oval_definitions",
+        "description":  "Sucht flottenweit in den OVAL-Schwachstellen-Definitionen, die ACMP kennt (SYS_Sec_OvalDefinitions), nach CVE oder Produkt - ein Aufruf, kein Client noetig. Je Definition: CVE, CVSS-Score, Severity, Veroeffentlicht/Geaendert (Datum der CVE), Titel, Produkte, BetroffeneClients (aktive Treffer auf nicht ausgemusterten Clients), Ausgenommen (in ACMP ausgenommen), GescanntSeitVeroeffentlichung (Clients, deren letzter OVAL-Scan nach der Veroeffentlichung lag) von ClientsMitScan, Clients (Computernamen, nur bei Suche mit cve) und OvalDefinitionId. Neueste zuerst. Ohne cve/product: die neuesten Definitionen (zeigt, wie aktuell der Definitionsbestand ist). LESEHILFE: Kein Treffer = ACMP hat (noch) keine Definition fuer diese CVE/dieses Produkt. BetroffeneClients 0 heisst nur \u0027beim letzten Scan nicht gefunden\u0027 - ist GescanntSeitVeroeffentlichung klein, sind die meisten Clients seitdem nicht gescannt und die Aussage nichts wert (Scan-Alter je Client: acmp_oval_scan_status). GescanntSeitVeroeffentlichung ist eine Obergrenze, weil ACMP eine Definition oft erst Tage nach der CVE erhaelt. Read-only.",
+        "sql":  "SET NOCOUNT ON; DECLARE @ls TABLE (ClientId uniqueidentifier PRIMARY KEY, LastScan datetime NULL); INSERT INTO @ls (ClientId, LastScan) SELECT h.ClientId, MAX(h.LastScanDateTime) FROM CLT_Sec_OvalDefinitions_Results_History h JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = h.ClientId WHERE c.IsRetired = 0 GROUP BY h.ClientId; DECLARE @mitScan int; SELECT @mitScan = COUNT(*) FROM @ls; WITH cl AS (SELECT CLIENTID FROM CLT_CLIENTS_TABLE WHERE IsRetired = 0), hit AS (SELECT r.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results r JOIN cl ON cl.CLIENTID = r.ClientId GROUP BY r.OID), exc AS (SELECT x.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results_Excluded x JOIN cl ON cl.CLIENTID = x.ClientId GROUP BY x.OID) SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 500 THEN @limit ELSE 50 END) o.CVEId AS CVE, CAST(ROUND(sd.Score, 1) AS decimal(3,1)) AS CvssScore, sd.Severity AS Severity, CONVERT(varchar(10), sd.PublishedDate, 23) AS Veroeffentlicht, CONVERT(varchar(10), sd.LastModifiedDate, 23) AS Geaendert, o.Title AS Titel, o.ProductNames AS Produkte, ISNULL(hit.n, 0) AS BetroffeneClients, ISNULL(exc.n, 0) AS Ausgenommen, (SELECT COUNT(*) FROM @ls s WHERE s.LastScan \u003e= sd.PublishedDate) AS GescanntSeitVeroeffentlichung, @mitScan AS ClientsMitScan, CASE WHEN @cve IS NOT NULL AND hit.n \u003e 0 THEN STUFF((SELECT \u0027, \u0027 + c.COMPUTERNAME FROM CLT_Sec_OvalDefinitions_Results r2 JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = r2.ClientId AND c.IsRetired = 0 WHERE r2.OID = o.OID ORDER BY c.COMPUTERNAME FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027) END AS Clients, o.DefinitionId AS OvalDefinitionId FROM SYS_Sec_OvalDefinitions o OUTER APPLY (SELECT TOP 1 v.Score, v.Severity, v.PublishedDate, v.LastModifiedDate FROM SYS_Sec_VulnerabilityScoreDefinitions v WHERE v.CVEId = o.CVEId ORDER BY v.Version DESC) sd LEFT JOIN hit ON hit.OID = o.OID LEFT JOIN exc ON exc.OID = o.OID WHERE (@cve IS NULL OR o.CVEId LIKE \u0027%\u0027 + @cve + \u0027%\u0027) AND (@product IS NULL OR o.ProductNames LIKE \u0027%\u0027 + @product + \u0027%\u0027 OR o.Title LIKE \u0027%\u0027 + @product + \u0027%\u0027) AND (@minScore IS NULL OR sd.Score \u003e= @minScore) AND (ISNULL(@affectedOnly, 0) = 0 OR hit.n \u003e 0) ORDER BY sd.PublishedDate DESC, sd.Score DESC, o.CVEId",
+        "args":  [
+                     {
+                         "name":  "cve",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "CVE-Id oder Teil davon, z.B. \u0027CVE-2024-3094\u0027 oder \u00272024-30\u0027. Mit cve werden auch die Namen der betroffenen Clients geliefert."
+                     },
+                     {
+                         "name":  "product",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Teilstring des Produkts, sucht in Produkten und Titel, z.B. \u0027Node.js\u0027, \u0027OpenSSL\u0027, \u00277-Zip\u0027. Hersteller schreiben Namen unterschiedlich - bei keinem Treffer einen kuerzeren Teil versuchen (z.B. \u0027node\u0027)."
+                     },
+                     {
+                         "name":  "minScore",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Optionaler CVSS-Mindest-Score (0-10), z.B. 7 fuer High und Critical."
+                     },
+                     {
+                         "name":  "affectedOnly",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Definitionen mit mindestens einem betroffenen Client. Standard 0 (alle, auch ohne Treffer)."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "default":  "50",
+                         "description":  "Hoechstzahl Zeilen, 1-500, Standard 50."
+                     }
+                 ]
+    },
+    {
         "name":  "acmp_teamviewer_ids",
         "description":  "TeamViewer-IDs aller Clients aus dem ACMP Custom Field \u0027TeamViewerID\u0027. Liefert Computername + ID fuer alle Clients mit befuelltem Feld. Verbindungs-URL: teamviewer10://control?device={ID}. Optional: @client fuer Einzelabfrage.",
         "sql":  "SELECT c.COMPUTERNAME AS Computername, v.CF_4982DC2075D548E887E5851FDD7E AS TeamViewerID FROM CLT_CLIENTS_TABLE c JOIN CF_VAL_C726C7A883D949388ED01A2C v ON v.CLIENTID = c.CLIENTID WHERE (@client IS NULL OR c.CLIENTID = @client) AND v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 ORDER BY c.COMPUTERNAME",

@@ -6,7 +6,7 @@
 
 [![Getestet mit ACMP 6.9 und 6.10](https://img.shields.io/badge/getestet%20mit-ACMP%206.9%20%7C%206.10-0067b8)](#kompatibilität)
 [![MCP Streamable HTTP](https://img.shields.io/badge/MCP-Streamable%20HTTP-6f42c1)](https://modelcontextprotocol.io/)
-[![130 Tools](https://img.shields.io/badge/Tools-130-2ea44f)](#tools)
+[![131 Tools](https://img.shields.io/badge/Tools-131-2ea44f)](#tools)
 [![Vier-Augen-Freigabe](https://img.shields.io/badge/Freigabe-Vier--Augen-e36209)](#so-sieht-die-freigabe-aus)
 <br>
 [![Windows Server](https://img.shields.io/badge/Plattform-Windows%20Server-0078d4)](#kompatibilität)
@@ -184,7 +184,7 @@ Darunter stehen der Roh-Befehl an ACMP, eine Schritt-für-Schritt-Erklärung mit
 
 ## Tools
 
-130 Tools in 11 Bereichen. Ein Klick auf einen Bereich zeigt alle Tools mit ihrer Freigabestufe:
+131 Tools in 11 Bereichen. Ein Klick auf einen Bereich zeigt alle Tools mit ihrer Freigabestufe:
 
 🟢 läuft sofort (nur lesen) · 🟡 Freigabe durch 1 Person · 🔴 Freigabe durch 2 verschiedene Personen
 
@@ -226,7 +226,7 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 </details>
 
 <details>
-<summary><b>Software &amp; Sicherheit</b> · 15 Tools · CVEs, fehlende Updates, Updates ablehnen, Defender, BitLocker, Lizenzen</summary>
+<summary><b>Software &amp; Sicherheit</b> · 16 Tools · CVEs, fehlende Updates, Updates ablehnen, Defender, BitLocker, Lizenzen</summary>
 
 | | Tool | Zweck |
 |---|---|---|
@@ -236,6 +236,7 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 | 🟢 | `acmp_wum_declined` *(DB)* | abgelehnte Windows-Updates mit Kommentar und betroffenen Clients, mit `scope: "open"` die offenen Kandidaten |
 | 🟡 | `acmp_wum_decline`, `acmp_wum_restore` *(WW)* | Windows-Updates ablehnen wie in der Konsole bzw. die Ablehnung aufheben, höchstens 10 je Auftrag, mit Pflicht-Kommentar. Läuft **immer** über die Freigabe-Seite |
 | 🟢 | `acmp_vulnerabilities`, `acmp_oval_scan_status` *(beide DB)* | Schwachstellen (CVEs) mit Score und Zeitpunkt des letzten Scans |
+| 🟢 | `acmp_oval_definitions` *(DB)* | flottenweite Suche in den OVAL-Definitionen nach CVE oder Produkt („Kennt ACMP die CVE schon, und wer ist betroffen?“), mit Hinweis, wie viele Clients seit Veröffentlichung gescannt wurden |
 | 🟢 | `acmp_defender_health` *(DB)* | Defender-Status („Wo ist der Echtzeitschutz aus?“) |
 | 🟢 | `acmp_bitlocker_status` *(DB)* | BitLocker-Status je Laufwerk |
 | 🟢 | `acmp_get_licenses`, `acmp_license_compliance` *(DB)* | Lizenzen mit Über- und Unterdeckung |
