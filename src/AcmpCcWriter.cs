@@ -283,6 +283,15 @@ partial class AcmpCcWriter
         o["totalSteps"] = s.TotalSteps;
         if (s.Format != 13 || s.TreeVersion != 3) o["format"] = "Altformat " + s.Format + " / VirtualTreeView " + s.TreeVersion + " (nur lesbar)";
         o["changeLogEntries"] = s.ChangeLog != null && s.ChangeLog.Length >= 4 ? BitConverter.ToInt32(s.ChangeLog, 0) : 0;
+        if (s.Head1Raw != null || s.Head2Raw != null || s.Head6Raw != null)
+        {
+            // meist leer; Block 1 = Namensliste (vermutlich beobachtete Variablen des Debuggers), wird beim Schreiben unveraendert uebernommen
+            var h = new JObject();
+            if (s.Head1Raw != null) h["1"] = CcFormat.HeadText(s.Head1Raw);
+            if (s.Head2Raw != null) h["2"] = CcFormat.HeadText(s.Head2Raw);
+            if (s.Head6Raw != null) h["6"] = CcFormat.HeadText(s.Head6Raw);
+            o["kopfbloecke"] = h;
+        }
         if (s.Warnings.Count > 0) o["warnings"] = new JArray(s.Warnings.ToArray());
         return o;
     }
@@ -928,6 +937,81 @@ partial class AcmpCcWriter
             o["aclEntries"] = aclCount;
             if (notes.Count > 0) o["hinweise"] = new JArray(notes.ToArray());
             return o;
+        }
+    }
+
+    // acmp_cc_update_draft wie acmp_cc_new_version (seit 22.10.2026; vorher wurden ohne 'variables' alle Projektvariablen geloescht und
+    // Schritt-IDs immer neu vergeben): ohne 'variables' bleiben die Projektvariablen des Entwurfs samt Startwerten, Schritt-IDs des Entwurfs
+    // bleiben (fremde IDs werden neu vergeben), '***' in Kennwortfeldern uebernimmt das gespeicherte Kennwort desselben Schritts.
+    // Schreibt Schritte (Kurzform aufgeloest, IDs fest) und Variablen in 'a' zurueck: beim Beantragen sind das die eingefrorenen Argumente,
+    // die Ausfuehrung erzeugt daraus genau den Inhalt der Vorschau (_stepIdsFixed: IDs nicht noch einmal gegen den Entwurf pruefen).
+    public CcScript BuildDraftUpdate(JObject a, out List<string> notes)
+    {
+        string id = GuidBraces(a["scriptId"] != null && a["scriptId"].Type == JTokenType.String ? (string)a["scriptId"] : null);
+        if (id == null) throw new Exception("scriptId ist keine GUID.");
+        if (!IsRegistered(id)) throw new Exception("Nur vom MCP angelegte Entwuerfe duerfen geaendert werden (" + id + " ist nicht in cc-drafts.json). Fuer eine neue Version eines vorhandenen (auch freigegebenen oder fremden) Commands: acmp_cc_new_version.");
+        if (string.IsNullOrEmpty(_readCs)) throw new Exception("DB-Lesezugang (db.connectionString) fehlt.");
+        JArray steps = a["steps"] as JArray;
+        if (steps == null && a["steps"] != null && a["steps"].Type == JTokenType.String && ((string)a["steps"]).Trim().StartsWith("["))
+            steps = JArray.Parse((string)a["steps"]);
+        CcScript draft; int ver;
+        var cfNotes = new List<string>();
+        using (var c = new SqlConnection(_readCs))
+        {
+            c.Open();
+            List<CcVersionRow> rows = LoadVersions(c, null, id);
+            if (rows.Count == 0) throw new Exception("Client Command " + id + " nicht gefunden.");
+            if (rows[0].State != 1) throw new Exception("Command ist kein Entwurf mehr (State " + rows[0].State + ") - fuer Aenderungen eine neue Version anlegen: acmp_cc_new_version.");
+            ver = rows[0].Version;
+            try { draft = rows[0].Client != null ? CcFormat.Decode(rows[0].Client) : null; }
+            catch (Exception ex) { throw new Exception("Client-Skript des Entwurfs v" + ver + " nicht lesbar: " + ex.Message + " - nichts geaendert."); }
+            steps = ExpandCustomFieldSteps(c, steps, cfNotes);
+        }
+        CcScript s = ComposeDraftUpdate(a, steps, draft, ver, out notes);
+        notes.InsertRange(0, cfNotes);
+        return s;
+    }
+
+    // Kern von BuildDraftUpdate ohne DB (offline getestet in CfParamTest.cs): steps = Kurzform schon aufgeloest, draft = Client-Skript des Entwurfs
+    internal CcScript ComposeDraftUpdate(JObject a, JArray steps, CcScript draft, int ver, out List<string> notes)
+    {
+        var draftIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (draft != null) CollectStepIds(draft.Roots, draftIds);
+        bool fixedIds = a["_stepIdsFixed"] != null && a["_stepIdsFixed"].Type == JTokenType.Boolean && (bool)a["_stepIdsFixed"];
+        JArray norm = NormalizeStepIds(steps, NewGuid, fixedIds ? null : draftIds);
+        JArray vars = a["variables"] as JArray;
+        bool varsFromDraft = vars == null;
+        if (varsFromDraft) vars = draft != null ? VarsToJson(draft.Vars) : new JArray();
+        var ctx = new CcBuildCtx();
+        ctx.KeepIds = true;
+        ctx.Secrets = CollectSecrets(draft);
+        ctx.SecretSource = "dem Entwurf v" + ver;
+        CcScript s = BuildScript(norm, vars, out notes, ctx);
+        ApplyStoredHeader(s, norm);
+        if (!fixedIds)
+        {
+            var newIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase); CollectStepIds(s.Roots, newIds);
+            int kept = 0; foreach (string g in newIds) if (draftIds.Contains(g)) kept++;
+            notes.Add("Schritt-IDs: " + kept + " von " + newIds.Count + " aus dem Entwurf v" + ver + " behalten" + (newIds.Count > kept ? ", " + (newIds.Count - kept) + " neu vergeben (neue Schritte oder ID nicht im Entwurf)" : "") + ".");
+            if (varsFromDraft)
+            {
+                var names = new List<string>(); foreach (CcVar v in draft != null ? draft.Vars : new List<CcVar>()) names.Add(v.Name);
+                notes.Add("Projektvariablen aus dem Entwurf v" + ver + " uebernommen (" + names.Count + (names.Count > 0 ? ": " + string.Join(", ", names.ToArray()) : "") + ").");
+            }
+        }
+        a["steps"] = norm; a["variables"] = vars; a["_stepIdsFixed"] = true;
+        return s;
+    }
+
+    static void CollectStepIds(List<CcNode> nodes, HashSet<string> ids)
+    {
+        foreach (CcNode n in nodes)
+        {
+            var doc = new XmlDocument(); doc.LoadXml(n.Xml);
+            var idEl = doc.DocumentElement["ID"];
+            string g = idEl != null ? GuidBraces(idEl.InnerText) : null;
+            if (g != null) ids.Add(g);
+            CollectStepIds(n.Children, ids);
         }
     }
 

@@ -80,7 +80,7 @@ icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:
 Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
-  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1") {
+  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1") {
     Copy-Item (Join-Path $repo $f) $InstallDir -Force
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null
@@ -241,6 +241,18 @@ if ($ask) {
       try { & (Join-Path $InstallDir "setup-kiosk-writer.ps1") -NoRestart } catch { Write-Bad "setup-kiosk-writer.ps1: $($_.Exception.Message)" }
       $cfg = Read-AcmpConfig $cfgPath
     } else { Write-Info "Spaeter: cd $InstallDir; .\setup-kiosk-writer.ps1" }
+  }
+  $extraActive = @("wumWriter","unixWriter","cfWriter" | Where-Object { $cfg.$_ -and $cfg.$_.enabled })
+  if ($extraActive.Count -eq 3) { Write-Ok "Weitere Schreib-Tools aktiv (Windows-Updates, Unix Scripts, individuelle Felder)" }
+  elseif ($ccNow -and (Read-YesNo "Weitere Schreib-Tools: Windows-Updates ablehnen, Unix Scripts schreiben, individuelle Felder anlegen? Von Aagon nicht vorgesehen" $false)) {
+    Write-Info "Vorbereitung (docs\ACMP-VORBEREITUNG.md > 'Weitere Schreib-Tools'):"
+    Write-Info "  1. Datenbank sichern"
+    Write-Info "  2. je Funktion das SQL als SQL-Admin ausfuehren: grant-wum-writer.sql, grant-unix-writer.sql, grant-cf-params.sql"
+    if (Read-YesNo "Ist das erledigt? Dann jetzt setup-extra-writers.ps1 starten (fragt je Funktion nach)" $false) {
+      if ($changed) { Save-AcmpConfig $cfg $cfgPath; $changed = $false }
+      try { & (Join-Path $InstallDir "setup-extra-writers.ps1") -NoRestart } catch { Write-Bad "setup-extra-writers.ps1: $($_.Exception.Message)" }
+      $cfg = Read-AcmpConfig $cfgPath
+    } else { Write-Info "Spaeter: cd $InstallDir; .\setup-extra-writers.ps1" }
   }
   $smtpActive = $cfg.approval.notify -and $cfg.approval.notify.enabled -and "$($cfg.approval.notify.smtpHost)" -notlike "HIER_*"
   if ($smtpActive) { Write-Ok "E-Mail-Benachrichtigung aktiv" }

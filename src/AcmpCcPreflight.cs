@@ -384,43 +384,37 @@ static class AcmpCcPreflight
         return o != null && !(o is DBNull) && Convert.ToInt32(o) == 1;
     }
 
-    // Rundlauf: die neuesten Commands entpacken, wieder packen und auf Bytegleichheit (entpackter Inhalt) pruefen.
+    // Feste Testfaelle des Rundlaufs: Commands, an denen er schon einmal gescheitert ist. Sie werden immer geprueft, auch wenn sie
+    // nicht unter den neuesten sind. Aagon-Commands behalten ihre ID beim Import; fehlt einer in dieser Datenbank, wird er uebersprungen.
+    public static readonly string[] FixedRoundtripIds = {
+        "{1F5A4238-731B-44B6-84F0-3EFB8F2D3222}"   // ACMP Unix Agent verteilen & Inventory (Console-Skript): Kopfblock 1 belegt, 22.10.2026
+    };
+
+    class RtStats { public int Commands, Same, Old, Fixed; public List<string> Fails = new List<string>(); public HashSet<string> Seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+
+    // Rundlauf: die neuesten Commands und die festen Testfaelle entpacken, wieder packen und auf Bytegleichheit (entpackter Inhalt) pruefen.
     // Altformat (12 / VirtualTreeView 2) ist nur lesbar und wird nur gezaehlt.
     static void CheckRoundtrip(JArray checks, SqlConnection rc, int sample)
     {
         if (sample <= 0) sample = 50;
+        const string latest = "SELECT SCRIPTID, DESCRIPTION, CLIENTSCRIPT, CONSOLESCRIPT, LastModifiedDate, ROW_NUMBER() OVER (PARTITION BY SCRIPTID ORDER BY ScriptVersion DESC) AS rn FROM SYS_SCRIPTS";
+        var st = new RtStats();
         var q = rc.CreateCommand();
         q.CommandTimeout = 120;
-        q.CommandText = "SELECT TOP (@n) SCRIPTID, DESCRIPTION, CLIENTSCRIPT, CONSOLESCRIPT FROM (" +
-            "SELECT SCRIPTID, DESCRIPTION, CLIENTSCRIPT, CONSOLESCRIPT, LastModifiedDate, ROW_NUMBER() OVER (PARTITION BY SCRIPTID ORDER BY ScriptVersion DESC) AS rn " +
-            "FROM SYS_SCRIPTS) x WHERE rn = 1 AND CLIENTSCRIPT IS NOT NULL ORDER BY LastModifiedDate DESC";
+        q.CommandText = "SELECT TOP (@n) SCRIPTID, DESCRIPTION, CLIENTSCRIPT, CONSOLESCRIPT FROM (" + latest + ") x WHERE rn = 1 AND CLIENTSCRIPT IS NOT NULL ORDER BY LastModifiedDate DESC";
         q.Parameters.AddWithValue("@n", sample);
-        int commands = 0, same = 0, old = 0; var fails = new List<string>();
-        using (var r = q.ExecuteReader())
-            while (r.Read())
-            {
-                commands++;
-                string nm = r.IsDBNull(1) ? r.GetString(0) : r.GetString(1);
-                for (int col = 2; col <= 3; col++)
-                {
-                    if (r.IsDBNull(col)) continue;
-                    byte[] blob = (byte[])r.GetValue(col);
-                    string part = col == 2 ? "Client" : "Console";
-                    try
-                    {
-                        CcScript s = CcFormat.Decode(blob);
-                        if (s.Format != 13 || s.TreeVersion != 3) { old++; continue; }
-                        byte[] a = CcFormat.Inflate(blob, 0, blob.Length);
-                        byte[] re = CcFormat.Encode(s);
-                        byte[] b = CcFormat.Inflate(re, 0, re.Length);
-                        int diff = FirstDiff(a, b);
-                        if (diff < 0) same++;
-                        else fails.Add("'" + nm + "' " + part + " ab Byte " + diff + " (" + a.Length + "/" + b.Length + ")");
-                    }
-                    catch (Exception ex) { fails.Add("'" + nm + "' " + part + ": " + ex.Message); }
-                }
-            }
-        string d = commands + " Commands: " + same + " Skripte bytegleich, " + old + " im Altformat (nur lesbar)";
+        using (var r = q.ExecuteReader()) while (r.Read()) RoundtripRow(r, st, false);
+        var f = rc.CreateCommand();
+        f.CommandTimeout = 120;
+        var ps = new List<string>();
+        for (int i = 0; i < FixedRoundtripIds.Length; i++) { ps.Add("@f" + i); f.Parameters.AddWithValue("@f" + i, FixedRoundtripIds[i]); }
+        f.CommandText = "SELECT SCRIPTID, DESCRIPTION, CLIENTSCRIPT, CONSOLESCRIPT FROM (" + latest + ") x WHERE rn = 1 AND SCRIPTID IN (" + string.Join(", ", ps.ToArray()) + ")";
+        int fixedInDb = 0;
+        if (ps.Count > 0)
+            using (var r = f.ExecuteReader()) while (r.Read()) { fixedInDb++; if (!st.Seen.Contains(r.GetString(0))) RoundtripRow(r, st, true); }
+        string d = st.Commands + " Commands: " + st.Same + " Skripte bytegleich, " + st.Old + " im Altformat (nur lesbar); feste Testfaelle " +
+            fixedInDb + " von " + FixedRoundtripIds.Length + " vorhanden" + (st.Fixed > 0 ? " (" + st.Fixed + " zusaetzlich zu den neuesten)" : "");
+        int same = st.Same; var fails = st.Fails;
         if (fails.Count > 0)
         {
             int show = Math.Min(fails.Count, 10);
@@ -428,6 +422,39 @@ static class AcmpCcPreflight
         }
         else if (same == 0) Add(checks, "Format-Rundlauf", "block", d + ". Kein Command im aktuellen Format zum Pruefen - einen Client Command in der Console anlegen und speichern, dann erneut pruefen (acmp_cc_writer_status refresh).");
         else Add(checks, "Format-Rundlauf", "ok", d);
+    }
+
+    static void RoundtripRow(SqlDataReader r, RtStats st, bool isFixed)
+    {
+        st.Commands++; st.Seen.Add(r.GetString(0));
+        if (isFixed) st.Fixed++;
+        string nm = r.IsDBNull(1) ? r.GetString(0) : r.GetString(1);
+        for (int col = 2; col <= 3; col++)
+        {
+            if (r.IsDBNull(col)) continue;
+            byte[] blob = (byte[])r.GetValue(col);
+            string part = col == 2 ? "Client" : "Console";
+            try
+            {
+                CcScript s = CcFormat.Decode(blob);
+                if (s.Format != 13 || s.TreeVersion != 3) { st.Old++; continue; }
+                byte[] a = CcFormat.Inflate(blob, 0, blob.Length);
+                byte[] re = CcFormat.Encode(s);
+                byte[] b = CcFormat.Inflate(re, 0, re.Length);
+                int diff = FirstDiff(a, b);
+                if (diff < 0) st.Same++;
+                else st.Fails.Add("'" + nm + "' " + part + " ab Byte " + diff + " " + Region(s, diff) + " (" + a.Length + "/" + b.Length + ")");
+            }
+            catch (Exception ex) { st.Fails.Add("'" + nm + "' " + part + ": " + ex.Message); }
+        }
+    }
+
+    // Wo liegt die erste Abweichung? Hilft beim Eingrenzen (Kopf = Kennung, Variablen, Kopfbloecke, Art)
+    static string Region(CcScript s, int offset)
+    {
+        if (offset < s.TreeOffset) return "im Kopf";
+        if (offset < s.ChangeLogOffset) return "im Schrittbaum";
+        return "im Aenderungsprotokoll";
     }
 
     static int FirstDiff(byte[] a, byte[] b)

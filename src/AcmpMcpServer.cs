@@ -31,6 +31,9 @@ static class AcmpMcp
     static AcmpCcWriter CCW;        // Client Commands lesen (Decode) und als Entwurf in die DB schreiben (ccWriter-Section)
     static AcmpCtl CTL;             // Vorlagen aus der ACMP CTL als Entwurf installieren (nutzt CCW, ctl-Section optional)
     static AcmpKiosk KIOSK;         // ACMP-Kiosk lesen und Eintraege/Filter schreiben (kioskWriter-Section, Schreib-Login wie ccWriter)
+    static AcmpWum WUM;             // Windows-Updates (CAWUM) ablehnen / Ablehnung aufheben (wumWriter-Section, Schreib-Login wie ccWriter)
+    static AcmpUnix UNIX;           // Unix Scripts lesen und schreiben (unixWriter-Section, Schreib-Login wie ccWriter)
+    static AcmpCustomFields CF;     // individuelle Felder lesen und anlegen (cfWriter-Section, Schreib-Login wie ccWriter)
     static JArray DbToolDefs;  // nicht inline initialisieren (laeuft sonst im .cctor vor dem AssemblyResolve-Handler)
     static JArray ApiToolDefs; // datengetriebene API-Tools aus api-tools.json (Public-API-Kommandos ohne Recompile)
     static string ApiKey;
@@ -62,6 +65,8 @@ static class AcmpMcp
         { "acmp_kiosk_add_image", "Write" },        { "acmp_kiosk_set_image", "Write" },
         { "acmp_kiosk_remove_image", "Write" },     { "acmp_kiosk_add_group", "Write" },
         { "acmp_kiosk_update_items", "Write" },     { "acmp_kiosk_update_group", "Write" },
+        { "acmp_wum_decline", "Write" },            { "acmp_wum_restore", "Write" },
+        { "acmp_cf_create", "Write" },              { "acmp_cc_set_parameters", "Write" },
     };
     static string TicketCreatedStateId = "{0E9A3C65-5EA3-42BE-80E9-B71A2C4F01C2}"; // Ticketstatus "Erstellt" fuer neue Tickets (Config: helpdesk.createdStateId)
     static bool IsKioskWriteTool(string name)
@@ -227,6 +232,58 @@ static class AcmpMcp
             }
             catch (Exception ex) { Log("Kiosk-Schreiben: Vorpruefung fehlgeschlagen: " + ex.Message); }
         }
+        WUM = new AcmpWum(dbCs, cfg["wumWriter"] as JObject, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!WUM.ConfigOk) Log("Updates ablehnen (WUM): aus (" + WUM.DisabledReason + ")");
+        else
+        {
+            try
+            {
+                JObject wpf = WUM.Preflight(true);
+                var wnotes = new List<string>();
+                foreach (JObject ck in (JArray)wpf["checks"]) if ((string)ck["result"] != "ok") wnotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
+                Log("Updates ablehnen (acmp_wum_decline): " + (wpf["declineTool"] != null && (bool)wpf["declineTool"] ? (WUM.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll)" : "GESPERRT - approvalGate=false (nur mit Gate)") : "GESPERRT - " + (wnotes.Count > 0 ? string.Join(" | ", wnotes.ToArray()) : "Vorpruefung nicht bestanden")) +
+                    "; Ablehnung aufheben (acmp_wum_restore): " + (wpf["restoreTool"] != null && (bool)wpf["restoreTool"] ? "AKTIV" : "GESPERRT"));
+            }
+            catch (Exception ex) { Log("Updates ablehnen (WUM): Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
+        UNIX = new AcmpUnix(dbCs, cfg["unixWriter"] as JObject, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!UNIX.ConfigOk) Log("Unix Scripts schreiben: aus (" + UNIX.DisabledReason + "); lesen (acmp_unix_scripts, acmp_unix_results) geht");
+        else
+        {
+            try
+            {
+                JObject upf = UNIX.Preflight(true);
+                var unotes = new List<string>();
+                foreach (JObject ck in (JArray)upf["checks"]) if ((string)ck["result"] != "ok") unotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
+                Func<string, string> st = k => upf[k] != null && (bool)upf[k] ? "AKTIV" : "GESPERRT";
+                Log("Unix Scripts schreiben (immer ueber Vier-Augen-Freigabe, auch bei bypassAll): anlegen " + st("createTool") + ", neue Version " + st("versionTool") + ", Ring/Freigabe " + st("ringTool") +
+                    (!UNIX.ApprovalGate ? " - approvalGate=false: gesperrt" : "") + (unotes.Count > 0 ? " | " + string.Join(" | ", unotes.ToArray()) : ""));
+            }
+            catch (Exception ex) { Log("Unix Scripts schreiben: Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
+        CF = new AcmpCustomFields(dbCs, cfg["cfWriter"] as JObject, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!CF.ConfigOk) Log("Individuelle Felder anlegen: aus (" + CF.DisabledReason + "); lesen (acmp_cf_list) geht");
+        else
+        {
+            try
+            {
+                JObject cpf = CF.Preflight(true);
+                var cnotes = new List<string>();
+                foreach (JObject ck in (JArray)cpf["checks"]) if ((string)ck["result"] != "ok") cnotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
+                Log("Individuelle Felder anlegen (acmp_cf_create): " + (cpf["createTool"] != null && (bool)cpf["createTool"] ? (CF.ApprovalGate ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll)" : "GESPERRT - approvalGate=false (nur mit Gate)") : "GESPERRT") +
+                    (cnotes.Count > 0 ? " | " + string.Join(" | ", cnotes.ToArray()) : ""));
+            }
+            catch (Exception ex) { Log("Individuelle Felder anlegen: Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
+        if (CCW != null && CCW.ConfigOk)
+        {
+            try
+            {
+                JObject ppf = CCW.ParamPreflight(true);
+                Log("CC-Parameter setzen (acmp_cc_set_parameters): " + ((bool)ppf["ok"] ? "AKTIV (immer ueber Vier-Augen-Freigabe, auch bei bypassAll)" : (string)ppf["summary"]));
+            }
+            catch (Exception ex) { Log("CC-Parameter setzen: Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
         Log("acmp_run_powershell: " + (PsCommandId != null ? "aktiv (Vorlage " + PsCommandId + ", Variable " + PsVariableName + ")" : "aus (runPowershell.clientCommandId nicht gesetzt)"));
         DbToolDefs = new JArray();
         if (DB.Enabled)
@@ -300,6 +357,13 @@ static class AcmpMcp
         APPROVAL.BypassAll = apprCfg != null && apprCfg["bypassAll"] != null && (bool)apprCfg["bypassAll"];
         APPROVAL.AlwaysGatedTools.Add("acmp_cc_release");   // Freigeben ersetzt den Klick in der Console: nie ohne Zustimmung
         APPROVAL.AlwaysGatedTools.Add("acmp_cc_new_version");   // schreibt in vorhandene, auch fremde Commands: nie ohne Zustimmung
+        APPROVAL.AlwaysGatedTools.Add("acmp_wum_decline");   // haelt Windows-Updates von allen Clients zurueck: nie ohne Zustimmung
+        APPROVAL.AlwaysGatedTools.Add("acmp_wum_restore");   // gibt abgelehnte Updates wieder frei: nie ohne Zustimmung
+        APPROVAL.AlwaysGatedTools.Add("acmp_unix_script_create");        // Skripte laufen als root auf Linux/macOS: nie ohne Zustimmung
+        APPROVAL.AlwaysGatedTools.Add("acmp_unix_script_new_version");
+        APPROVAL.AlwaysGatedTools.Add("acmp_unix_script_set_ring");      // Freigeben ersetzt den Ring-Wechsel in der Console
+        APPROVAL.AlwaysGatedTools.Add("acmp_cf_create");                 // aendert das DB-Schema (neue Spalte/Tabelle): nie ohne Zustimmung
+        APPROVAL.AlwaysGatedTools.Add("acmp_cc_set_parameters");         // wirkt sofort auf Jobs und Kiosk, auch bei freigegebenen Commands
         APPROVAL.GetAllTools = delegate() { return (JArray)ToolsList()["tools"]; };
         var toolCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         JObject tcCfg = apprCfg != null ? apprCfg["toolApprovalCounts"] as JObject : null;
@@ -506,6 +570,9 @@ static class AcmpMcp
                     "- Vorlage aus der ACMP CTL (Community Template Library) als Entwurf installieren: acmp_lib_install (erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
                     "- ACMP-Kiosk: Ordner, Eintraege und Sichtbarkeitsfilter lesen acmp_kiosk_tree ; Ordner anlegen acmp_kiosk_add_group ; Ordner umbenennen (DE/EN), Ordner-Icon/-Filter aendern acmp_kiosk_update_group ; Eintrag anlegen acmp_kiosk_add_item ; Eintraege verschieben/umbenennen/Beschreibung/Icon/Filter aendern, auch viele in einem Auftrag, acmp_kiosk_update_items ; Filter setzen/entfernen acmp_kiosk_set_filter ; Eintrag entfernen acmp_kiosk_remove_item ; zurueck acmp_kiosk_restore (add_group/update_group/add_item/update_items/set_filter erst mit dryRun=true pruefen und dem Menschen zeigen)\n" +
                     "- Kiosk-Icons: Auswahl mit Bildern acmp_kiosk_images preview=3 (where=both sucht auch Dateien, die noch nicht hochgeladen sind) und den Menschen waehlen lassen ; neues Bild hochladen acmp_kiosk_add_image (Datei vorher in den freigegebenen UNC-Ordner legen) ; Icon eines Eintrags/Ordners tauschen acmp_kiosk_set_image ; vom MCP hochgeladenes, unbenutztes Bild entfernen acmp_kiosk_remove_image\n" +
+                    "- Unix Scripts (Linux/macOS mit ACMP Unix Agent): lesen acmp_unix_scripts ; Ergebnisse/Ausgabe acmp_unix_results ; anlegen acmp_unix_script_create ; neue Version acmp_unix_script_new_version ; Verteilungsring/Freigabe acmp_unix_script_set_ring (alle drei erst dryRun=true, laufen immer ueber die Freigabe-Seite). Unix-Jobs STARTET der Mensch in der Console (Container/Abfrage -> Unix-Jobs ausfuehren), nicht der MCP.\n" +
+                    "- Individuelle Felder (Custom Fields): Baum, Spalten und Werte je Client acmp_cf_list (field=<Name> values=true zeigt die Werte und ihre Verteilung) ; neue Tabelle/Felder (Ganzzahl, Text) acmp_cf_create (erst dryRun=true, laeuft immer ueber die Freigabe-Seite) ; in einem Client Command schreibt der Schritt 'Wert auf Server speichern' hinein - Kurzform in acmp_cc_new_version/acmp_cc_create_draft: {\"class\":\"TStoreValueOnACMPServer\",\"fields\":{\"CustomField\":\"<Feld>\",\"Table\":\"<Tabelle>\",\"Value\":\"%VAR%\"}}\n" +
+                    "- Parameter eines Client Commands (Abfrage beim Job-Anlegen und im Kiosk: Text, Auswahl, Kontrollkaestchen auf Projektvariablen): lesen acmp_cc_parameters ; setzen acmp_cc_set_parameters (vollstaendige Liste, erst dryRun=true, laeuft immer ueber die Freigabe-Seite)\n" +
                     "Tool-Name unbekannt: tools/list zeigt alle Tools, acmp_describe { command } zeigt Details. Es ist fast immer besser, ein vorhandenes Tool zu nutzen, als eine Aufgabe ohne Tool zu loesen.";
                 return JsonRpcResult(idTok, r);
             }
@@ -1169,7 +1236,7 @@ static class AcmpMcp
         if (CCW != null && CCW.WriteEnabled)
         {
             string gateNote = CCW.ApprovalGate ? " Laeuft ueber die Vier-Augen-Freigabe: zuerst entsteht eine Freigabe-Anfrage mit Vorschau, geschrieben wird erst nach Zustimmung." : "";
-            const string stepsHelp = "Schrittbaum als JSON-Array: [{\"class\":\"TSetProjectVar\",\"description\":\"Projektvariable setzen TEST zu \\\"Hallo\\\"\",\"fields\":{\"Variable_name\":\"TEST\",\"Content_list\":\"\",\"Content_option\":\"SingleLine\",\"Content\":\"Hallo\"}}, {\"class\":\"TActionIf\",\"description\":\"If ..\",\"fields\":{...},\"children\":[...]}]. Felder je Klasse am besten aus acmp_cc_decode eines vorhandenen Commands uebernehmen. 'description' ist optional: fehlt sie, wird die Standardbeschreibung der deutschen Console erzeugt (z.B. 'Befehl ausfuehren', 'Projektvariable setzen X zu \"Y\"', 'Case (1)'). Alternativ {\"class\":..., \"xml\":\"<TKlasse>...</TKlasse>\"}.";
+            const string stepsHelp = "Schrittbaum als JSON-Array: [{\"class\":\"TSetProjectVar\",\"description\":\"Projektvariable setzen TEST zu \\\"Hallo\\\"\",\"fields\":{\"Variable_name\":\"TEST\",\"Content_list\":\"\",\"Content_option\":\"SingleLine\",\"Content\":\"Hallo\"}}, {\"class\":\"TActionIf\",\"description\":\"If ..\",\"fields\":{...},\"children\":[...]}]. Felder je Klasse am besten aus acmp_cc_decode eines vorhandenen Commands uebernehmen. 'description' ist optional: fehlt sie, wird die Standardbeschreibung der deutschen Console erzeugt (z.B. 'Befehl ausfuehren', 'Projektvariable setzen X zu \"Y\"', 'Case (1)'). Alternativ {\"class\":..., \"xml\":\"<TKlasse>...</TKlasse>\"}. Kurzform fuer 'Wert auf Server speichern' in ein individuelles Feld: {\"class\":\"TStoreValueOnACMPServer\",\"fields\":{\"CustomField\":\"<Feldname oder GUID>\",\"Table\":\"<Tabelle, optional>\",\"Value\":\"%VAR%\",\"Ignore_error\":\"True\"}} - Tabellen-/Spaltenname, FieldType und Kopf-JSON (fuer den Export) fuellt der MCP aus der DB (acmp_cf_list zeigt die Felder).";
             var cp = new JObject();
             cp["name"] = Prop("string", "Name des neuen Client Commands.");
             cp["folder"] = Prop("string", "Ordner: GUID oder eindeutiger Name aus dem Client-Command-Baum.");
@@ -1183,12 +1250,12 @@ static class AcmpMcp
             var up = new JObject();
             up["scriptId"] = Prop("string", "ScriptId-GUID eines vom MCP angelegten Entwurfs.");
             up["steps"] = Prop("array", stepsHelp + " Ersetzt den kompletten Schrittbaum.");
-            up["variables"] = Prop("array", "Optional: Projektvariablen (ersetzt die Liste). Von Schritten beschriebene Variablen werden automatisch ergaenzt.");
+            up["variables"] = Prop("array", "Optional: Projektvariablen (ersetzt die Liste). Standard: Variablen des Entwurfs mit Startwerten. Von Schritten beschriebene Variablen werden automatisch ergaenzt.");
             up["name"] = Prop("string", "Optional: neuer Name.");
             up["longDescription"] = Prop("string", "Optional: neuer Beschreibungstext.");
             up["intent"] = Prop("string", "Was/warum (fuers Protokoll).");
             tools.Add(Tool("acmp_cc_update_draft",
-                "Ersetzt die Schritte eines vom MCP angelegten ENTWURFS (State 1). Sichert vorher automatisch (Antwort nennt die Sicherungsdatei). Freigegebene oder fremde Commands werden abgelehnt - dafuer acmp_cc_new_version." + gateNote,
+                "Ersetzt die Schritte eines vom MCP angelegten ENTWURFS (State 1). Wie acmp_cc_new_version: Schritte mit der 'id' eines Schritts im Entwurf behalten ihre ID (Ausgabe von acmp_cc_decode), '***' in Kennwortfeldern uebernimmt dann das gespeicherte Kennwort; ohne 'variables' bleiben die Projektvariablen des Entwurfs. Sichert vorher automatisch (Antwort nennt die Sicherungsdatei). Freigegebene oder fremde Commands werden abgelehnt - dafuer acmp_cc_new_version." + gateNote,
                 up, new[] { "scriptId", "steps" }));
             var rp = new JObject();
             rp["backup"] = Prop("string", "Dateiname der Sicherung (aus der Antwort von acmp_cc_update_draft).");
@@ -1281,6 +1348,142 @@ static class AcmpMcp
                 "Auf Clients laeuft weiter die freigegebene Version, bis die neue freigegeben wird (acmp_cc_release oder ACMP-Console). Gibt es schon einen Entwurf eines anderen Bearbeiters, nur mit replaceDraft=true. Eigene MCP-Entwuerfe weiter mit acmp_cc_update_draft. " +
                 "Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Vorschau zeigt die Aenderungen gegenueber der freigegebenen Version, die Anfrage friert Basis und neuen Inhalt (SHA-256) ein.",
                 nv, new[] { "scriptId", "steps" }));
+            var pr = new JObject();
+            pr["scriptId"] = Prop("string", "ScriptId-GUID oder eindeutiger Name des Client Commands.");
+            pr["ids"] = Prop("boolean", "Optional: auch die Ids der Parameter und Auswahl-Eintraege zeigen.");
+            pr["status"] = Prop("boolean", "true = zusaetzlich Vorpruefung (Schema, Rechte, Trigger der Parameter-Tabellen) fuer acmp_cc_set_parameters.");
+            tools.Add(Tool("acmp_cc_parameters",
+                "Zeigt die Parameter eines Client Commands (Console: Eigenschaften -> Client Command spezifisch -> Parameter): Typ (Text, Auswahl, Kontrollkaestchen), Projektvariable, Beschriftung DE/EN, Auswahlwerte, Standard, ab welcher Version; dazu die Projektvariablen der neuesten Version und Warnungen, wenn ein Schritt 'Projektvariable setzen' den Parameterwert ueberschreibt. Parameter fragt ACMP beim Anlegen eines Jobs und im Kiosk ab; der Wert ersetzt beim Jobstart den Startwert der Projektvariable. (read-only)",
+                pr, new[] { "scriptId" }));
+            var ps = new JObject();
+            ps["scriptId"] = Prop("string", "ScriptId-GUID oder eindeutiger Name des Client Commands (nicht in Aagon-Standardordnern).");
+            ps["parameters"] = Prop("array", AcmpCcWriter.ParamsHelp);
+            ps["fromVersion"] = Prop("integer", "Optional: ab welcher Version neue Parameter gelten (Standard: erste Version des Commands, wie die Console). Vorhandene behalten ihre Startversion.");
+            ps["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (neu/geaendert/entfernt, Warnung bei 'Projektvariable setzen'), nichts schreiben. Vor jeder Anfrage empfohlen.");
+            ps["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cc_set_parameters",
+                "Setzt die Parameter eines Client Commands wie der Dialog 'Parameter' in der Console: die Liste ersetzt alle bisherigen (SYS_Jobs_Parameters_Declarations, _Config, _Config_Values), Ids wie die Console (UUID v5 aus Projektvariable und ScriptId; Parameter mit anderer Id stellt das Tool um). Wirkt sofort fuer neue Jobs, Kiosk und Job Collections, ohne neue Version des Commands. " +
+                "Nur schreibbare Projektvariablen der neuesten Version, je Variable ein Parameter. Achtung: ein Schritt 'Projektvariable setzen' fuer dieselbe Variable ueberschreibt den Parameterwert beim Lauf - die Vorschau warnt. " +
+                "Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Anfrage friert den Stand der Parameter (SHA-256) ein, hat er sich bis zur Zustimmung geaendert, wird nichts geschrieben. Sicherung vorher (cc-backups, zurueck mit der Liste 'vorherAlsAuftrag').",
+                ps, new[] { "scriptId", "parameters" }));
+        }
+
+        if (DB != null && DB.Enabled && CF != null)
+        {
+            string cGate = CF.ConfigOk ? " Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Anfrage friert Ids und Stand der Tabelle ein, hat sich bis zur Zustimmung etwas geaendert, wird nichts geschrieben. Plan gesichert in cf-backups." : " Writer fuer individuelle Felder ist ausgeschaltet: nur dryRun moeglich.";
+            var cl = new JObject();
+            cl["table"] = Prop("string", "Optional: nur diese Tabelle (Name oder GUID).");
+            cl["field"] = Prop("string", "Optional: genau ein Feld (deutscher/englischer Name oder GUID) mit Spalte, Typ und Hinweis fuer 'Wert auf Server speichern'.");
+            cl["values"] = Prop("boolean", "Nur mit field: Werte je Client (Computername) und Verteilung der Werte (z.B. wie viele Clients Status 2 haben).");
+            cl["client"] = Prop("string", "Nur mit values: Computername-Filter (* als Platzhalter).");
+            cl["top"] = Prop("integer", "Nur mit values: hoechstens so viele Clients (Standard 50, max. 500).");
+            cl["status"] = Prop("boolean", "true = zusaetzlich Vorpruefung (Prozeduren, Rechte, Trigger) fuer acmp_cf_create.");
+            tools.Add(Tool("acmp_cf_list",
+                "Individuelle Felder (Custom Fields) der ACMP: Ordner > Tabelle > Felder mit Id, Bezeichnung DE/EN, Eingabemethode, Laenge/Bereich, Spalte (CF_VAL_.../CF_...) und SQL-Typ; mit field und values=true die Werte je Client. Grundlage fuer Abfragen/Container und den Schritt 'Wert auf Server speichern'. (read-only)",
+                cl, null));
+            var cc = new JObject();
+            cc["table"] = Prop("string", "Vorhandene Client-Tabelle (Name oder GUID), in die die Felder kommen - oder statt dessen newTable.");
+            cc["newTable"] = Prop("string", "Name einer NEUEN Tabelle (einfache Tabelle, ein Datensatz je Client) - statt table.");
+            cc["folder"] = Prop("string", "Nur mit newTable: Ordner unter Client\\Custom Fields (Name, Pfad oder GUID; Standard 'Client Info').");
+            cc["tableDescription"] = Prop("string", "Nur mit newTable: Beschreibung der Tabelle (optional).");
+            cc["fields"] = Prop("array", AcmpCustomFields.FieldsHelp);
+            cc["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Spalten, Typen, Variablennamen, Vergleich mit vorhandenen Feldern), nichts schreiben. Vor jeder Anfrage empfohlen.");
+            cc["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_cf_create",
+                "Legt individuelle Felder (Custom Fields) fuer Clients an wie die ACMP-Console (Ablauf aus dem SQL-Mitschnitt des ACMP-Servers): optional eine neue Tabelle (CF_VAL_..., PK, Rechte der ACMP-Rollen, FK auf die Clients, SYS_TableRelations), je Feld eine Spalte (Ganzzahl BIGINT oder Text NVARCHAR(n)) samt Metadaten (VW_SYS_DISPLAYFIELDS, SYS_CustomFields). " +
+                "Die DDL laeuft ueber zwei Prozeduren mit festem Muster (grant-cf-params.sql), der Schreib-Login hat keine DDL-Rechte. Nur Client-Tabellen, keine Mehrfachtabellen, nur Ganzzahl und Text, hoechstens " + AcmpCustomFields.MaxFields + " Felder je Auftrag. Loeschen nur in der Console." + cGate,
+                cc, new[] { "fields" }));
+        }
+
+        if (DB != null && DB.Enabled && WUM != null)
+        {
+            string wGate = WUM.ConfigOk ? " Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Anfrage friert den Stand der Updates ein, hat sich bis zur Zustimmung etwas geaendert, wird nichts geschrieben. Vorher Sicherung der Zeilen (wum-backups)." : " WUM-Writer ist ausgeschaltet: nur dryRun moeglich.";
+            var wl = new JObject();
+            wl["scope"] = Prop("string", "Optional: declined (abgelehnte Updates, Standard) oder open (noch offene Updates: nicht abgelehnt, nicht abgeloest, nicht abgelaufen - Kandidaten zum Ablehnen, mit den meisten Fehlschlaegen zuerst).");
+            wl["search"] = Prop("string", "Optional: Teil des Update-Namens oder KB-Nummer (z.B. KB5127648 oder 26H2). Achtung: Kumulatives Update und 26H2 koennen dieselbe KB-Nummer tragen - Ablehnen immer mit der Id.");
+            wl["id"] = Prop("string", "Optional: genau ein Update (Update-Id, GUID).");
+            wl["includeAuto"] = Prop("boolean", "Nur bei scope=declined: auch die vom nachtlichen Bereinigungsjob abgelehnten, unbenutzten Updates zeigen (Standard: ausgeblendet).");
+            wl["top"] = Prop("integer", "Optional: hoechstens so viele (Standard 50, max. 200).");
+            wl["status"] = Prop("boolean", "true = zusaetzlich Stand der Vorpruefung und Rechte des Schreib-Logins (acmp_wum_decline / acmp_wum_restore).");
+            tools.Add(Tool("acmp_wum_declined",
+                "Listet Windows-Updates der ACMP-Update-Verwaltung (CAWUM): abgelehnte (Name, KB, Klassifizierung, Kommentar, Ablehnungszeit, wie viele Clients es brauchen/installiert haben/fehlgeschlagen) oder mit scope=open die noch offenen Kandidaten. Die Update-Id aus dieser Liste (oder acmp_failed_updates) braucht acmp_wum_decline. (read-only)",
+                wl, null));
+            var wd = new JObject();
+            wd["updateIds"] = Prop("array", AcmpWum.IdsHelp);
+            ((JObject)wd["updateIds"])["items"] = new JObject(new JProperty("type", "string"));
+            wd["updateId"] = Prop("string", "Statt updateIds: genau ein Update (Update-Id, GUID).");
+            wd["comment"] = Prop("string", "Pflicht: Warum wird das Update abgelehnt? (mindestens 8 Zeichen, steht als 'MCP <Bediener>: <Text>' in der Console).");
+            wd["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Name, KB, betroffene Clients, Warnung bei Sicherheitsupdates, andere Updates mit gleicher KB-Nummer), nichts schreiben. Vor jeder Anfrage empfohlen.");
+            wd["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_wum_decline",
+                "Lehnt Windows-Updates in ACMP ab (wie 'Ablehnen' in der Console): Eintrag in Sys_Wum_DeclinedUpdates ueber die ACMP-Prozedur ap_Wum_DeclineUpdates, danach Flags neu aufbauen. Abgelehnte Updates werden Clients nicht mehr angeboten; bereits installierte bleiben. Hoechstens " + AcmpWum.MaxIds + " Updates je Auftrag, nur per Update-Id, Pflicht-Kommentar; abgeloeste und abgelaufene Updates werden nicht abgelehnt. Zurueck mit acmp_wum_restore." + wGate,
+                wd, new[] { "comment" }));
+            var wr = new JObject();
+            wr["updateIds"] = Prop("array", AcmpWum.IdsHelp);
+            ((JObject)wr["updateIds"])["items"] = new JObject(new JProperty("type", "string"));
+            wr["updateId"] = Prop("string", "Statt updateIds: genau ein Update (Update-Id, GUID).");
+            wr["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Kommentar und Zeit der Ablehnung, betroffene Clients), nichts schreiben.");
+            wr["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_wum_restore",
+                "Hebt die Ablehnung von Windows-Updates in ACMP auf: loescht die Zeile in Sys_Wum_DeclinedUpdates und baut die Flags neu auf; das Update wird den Clients wieder angeboten, soweit Collections und Testring es zulassen. Hoechstens " + AcmpWum.MaxIds + " Updates je Auftrag, nur per Update-Id. Erster Einsatz mit einem harmlosen, vom Bereinigungsjob abgelehnten Update und Kontrolle in der Console (das Aufheben ist noch nicht gegen die Console belegt)." + wGate,
+                wr, null));
+        }
+
+        if (DB != null && DB.Enabled && UNIX != null)
+        {
+            string uGate = UNIX.ConfigOk ? " Laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll); die Anfrage friert Inhalt (SHA-256) und Stand ein, hat sich bis zur Zustimmung etwas geaendert, wird nichts geschrieben. Protokoll in unix-backups." : " Unix-Script-Writer ist ausgeschaltet: nur dryRun moeglich.";
+            const string noStart = " Unix-Jobs STARTEN kann der MCP nicht (ACMP 6.10 hat dafuer weder API noch Job Collection): der Mensch startet in der Console ueber Container oder Abfrage -> 'Unix-Jobs ausfuehren', danach Ergebnis mit acmp_unix_results.";
+            var us = new JObject();
+            us["script"] = Prop("string", "Optional: Name oder Id (GUID) eines Unix Scripts - dann mit allen Versionen (Ring, Freigabe) und dem Inhalt einer Version.");
+            us["version"] = Prop("integer", "Nur mit script: Versionsnummer fuer den Inhalt (Standard: neueste).");
+            us["content"] = Prop("boolean", "Nur mit script: Inhalt mitliefern (Standard true).");
+            us["folder"] = Prop("string", "Ohne script: nur Skripte dieses Unix-Script-Ordners (Name, Pfad wie 'Examples\\Linux' oder GUID).");
+            us["search"] = Prop("string", "Ohne script: Teil des Skriptnamens.");
+            us["status"] = Prop("boolean", "true = zusaetzlich Stand der Vorpruefung und Rechte des Schreib-Logins (acmp_unix_script_*).");
+            tools.Add(Tool("acmp_unix_scripts",
+                "Unix Scripts der ACMP (Desktop Automation -> Unix Scripts, Bash/Zsh fuer Linux- und macOS-Clients mit ACMP Unix Agent): ohne script die Liste mit Ordner, Interpreter, Log-Einstellung und welche Version freigegeben ist; mit script alle Versionen (Verteilungsring: Testring 1, Testring 2, Freigegeben) und den Inhalt. (read-only)" + noStart,
+                us, null));
+            var ur = new JObject();
+            ur["client"] = Prop("string", "Optional: Computername (z.B. linux-web-01) oder ClientId-GUID.");
+            ur["script"] = Prop("string", "Optional: Name oder Id des Unix Scripts.");
+            ur["days"] = Prop("integer", "Zeitraum in Tagen (Standard 7, max. 90).");
+            ur["top"] = Prop("integer", "Hoechstens so viele Laeufe (Standard 20, max. 100), neueste zuerst.");
+            ur["output"] = Prop("boolean", "Ausgabe (StdOut/StdErr) mitliefern (Standard true; false = nur Status und erste Zeile).");
+            ur["maxChars"] = Prop("integer", "Hoechstens so viele Zeichen je Ausgabe (Standard 20000, max. 100000).");
+            tools.Add(Tool("acmp_unix_results",
+                "Ergebnisse von Unix Scripts je Client: Job-Monitor (Status, Ergebnis, Zeit, ausgeloest von) mit der vollstaendigen Ausgabe des Skripts (StdOut/StdErr aus CLT_UnixClient_Scripts_Logs; gespeichert je nach Log-Einstellung des Skripts). Laufende Jobs erscheinen mit Status Zugewiesen/Laeuft ohne Ausgabe. (read-only)",
+                ur, null));
+            var uc = new JObject();
+            uc["name"] = Prop("string", "Name des neuen Unix Scripts (hoechstens 100 Zeichen, im Ordner eindeutig).");
+            uc["folder"] = Prop("string", "Unix-Script-Ordner: Name, Pfad (z.B. 'Examples\\Linux') oder GUID (acmp_unix_scripts listet die Ordner).");
+            uc["content"] = Prop("string", "Skript-Inhalt (Text). Zeilenenden werden wie in der Console als CRLF gespeichert; der Agent fuehrt es mit dem Interpreter aus.");
+            uc["interpreter"] = Prop("string", "bash (Standard) oder zsh.");
+            uc["storeLog"] = Prop("string", "Ausgabe speichern: always (immer, Standard - noetig fuer acmp_unix_results), error (Wert 1 wie die Aagon-Beispiele, vermutlich nur bei Fehler) oder never.");
+            uc["description"] = Prop("string", "Optional: Beschreibung.");
+            uc["ring"] = Prop("string", "Verteilungsring der Version 1: 1 (Testring 1, Standard wie in der Console), 2 oder 255/freigegeben.");
+            uc["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben. Vor jeder Anfrage empfohlen.");
+            uc["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_unix_script_create",
+                "Legt ein NEUES Unix Script an (wie 'Unix Script hinzufuegen' in der Console): Skript mit Version 1 im gewaehlten Verteilungsring (Standard Testring 1, also noch nicht freigegeben), Rechte wie der Ordner." + uGate + noStart,
+                uc, new[] { "name", "folder", "content" }));
+            var uv = new JObject();
+            uv["script"] = Prop("string", "Name oder Id des vorhandenen Unix Scripts.");
+            uv["content"] = Prop("string", "Neuer, vollstaendiger Skript-Inhalt (aktuellen Inhalt mit acmp_unix_scripts script=... lesen und aendern).");
+            uv["ring"] = Prop("string", "Verteilungsring der neuen Version: 1 (Standard wie 'Version hinzufuegen' in der Console), 2 oder 255/freigegeben.");
+            uv["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau mit den geaenderten Zeilen zeigen, nichts schreiben. Vor jeder Anfrage empfohlen.");
+            uv["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_unix_script_new_version",
+                "Legt eine NEUE VERSION eines Unix Scripts an (wie 'Version hinzufuegen' in der Console); vorhandene Versionen bleiben unveraendert, auf Clients laeuft weiter die freigegebene, bis die neue freigegeben ist (acmp_unix_script_set_ring ring=255). Die Vorschau zeigt die geaenderten Zeilen." + uGate + noStart,
+                uv, new[] { "script", "content" }));
+            var ug = new JObject();
+            ug["script"] = Prop("string", "Name oder Id des Unix Scripts.");
+            ug["version"] = Prop("integer", "Versionsnummer (Standard: neueste).");
+            ug["ring"] = Prop("string", "Neuer Verteilungsring: 255/freigegeben (Freigabe), 1 (Testring 1) oder 2 (Testring 2).");
+            ug["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+            ug["intent"] = Prop("string", "Was/warum (fuers Protokoll und die Freigabe).");
+            tools.Add(Tool("acmp_unix_script_set_ring",
+                "Aendert den Verteilungsring einer Unix-Script-Version (wie 'Verteilungsring aendern' in der Console) - ring=255 gibt sie frei, dann laeuft sie beim naechsten Unix-Job aus der Console. Zurueck: dasselbe Tool mit dem alten Ring." + uGate + noStart,
+                ug, new[] { "script", "ring" }));
         }
 
         var r = new JObject(); r["tools"] = tools; return r;
@@ -1316,13 +1519,23 @@ static class AcmpMcp
     {
         Log(name + " von " + requester + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
         if (name.StartsWith("acmp_kiosk_")) return KIOSK.Execute(name, a, requester);
-        if (name == "acmp_cc_create_draft" || name == "acmp_cc_update_draft")
+        if (name == "acmp_wum_decline" || name == "acmp_wum_restore") return WUM.Execute(name, a, requester);   // nur mit eingefrorenem Plan aus der Freigabe
+        if (AcmpUnix.IsWriteTool(name)) return UNIX.Execute(name, a, requester);   // ebenso
+        if (name == "acmp_cf_create") return CF.Execute(a, requester);              // ebenso
+        if (name == "acmp_cc_set_parameters") return CCW.RunSetParameters(a, requester);   // ebenso
+        if (name == "acmp_cc_update_draft")
         {
             List<string> notes;
-            CcScript s = CCW.BuildScript(a["steps"] as JArray, a["variables"] as JArray, out notes);
-            return name == "acmp_cc_create_draft"
-                ? CCW.CreateDraft((string)a["name"], (string)a["folder"], (string)a["longDescription"], s, requester, notes)
-                : CCW.UpdateDraft((string)a["scriptId"], (string)a["name"], (string)a["longDescription"], s, requester, notes);
+            CcScript s = CCW.BuildDraftUpdate(a, out notes);   // Variablen und Schritt-IDs des Entwurfs bleiben (wie acmp_cc_new_version)
+            return CCW.UpdateDraft((string)a["scriptId"], (string)a["name"], (string)a["longDescription"], s, requester, notes);
+        }
+        if (name == "acmp_cc_create_draft")
+        {
+            List<string> notes;
+            JArray steps = CCW.ExpandCustomFieldSteps(a["steps"] as JArray, null);   // Kurzform "Wert auf Server speichern" aufloesen
+            CcScript s = CCW.BuildScript(steps, a["variables"] as JArray, out notes);
+            AcmpCcWriter.ApplyStoredHeader(s, steps);
+            return CCW.CreateDraft((string)a["name"], (string)a["folder"], (string)a["longDescription"], s, requester, notes);
         }
         if (name == "acmp_cc_restore_draft") return CCW.RestoreDraft((string)a["backup"], requester);
         if (AcmpCcWriter.IsFolderWriteTool(name)) return CCW.RunFolderOp(name, a, requester);
@@ -1343,7 +1556,15 @@ static class AcmpMcp
         if (name == "acmp_cc_create_draft" || name == "acmp_cc_update_draft")
         {
             List<string> notes;
-            CcScript s = CCW.BuildScript(a["steps"] as JArray, a["variables"] as JArray, out notes);
+            CcScript s;
+            if (name == "acmp_cc_update_draft") s = CCW.BuildDraftUpdate(frozen, out notes);   // friert Schritte mit IDs und Variablen ein
+            else
+            {
+                var cfNotes = new List<string>();
+                JArray steps = CCW.ExpandCustomFieldSteps(a["steps"] as JArray, cfNotes);
+                s = CCW.BuildScript(steps, a["variables"] as JArray, out notes);
+                notes.InsertRange(0, cfNotes);
+            }
             var head = new List<string>();
             if (name == "acmp_cc_create_draft") head.Add("Neuen Entwurf \"" + (string)a["name"] + "\" im Ordner \"" + (string)a["folder"] + "\" anlegen.");
             else head.Add("Entwurf " + (string)a["scriptId"] + " aendern: kompletter Schrittbaum wird ersetzt" + (a["name"] != null ? ", neuer Name \"" + (string)a["name"] + "\"" : "") + ".");
@@ -1374,6 +1595,15 @@ static class AcmpMcp
         {
             // Plan einfrieren: Basisversion mit SHA-256, Schritte mit festen IDs, SHA-256 des neuen Inhalts - genau das wird geschrieben
             JObject plan = CCW.PlanNewVersion(a, true);
+            preview = (JArray)plan["vorschau"];
+            frozen = new JObject();
+            frozen["_plan"] = plan;
+        }
+        else if (name == "acmp_cc_set_parameters")
+        {
+            // Plan einfrieren: Stand der Parameter (SHA-256) und die vollstaendige neue Liste mit Ids - genau das wird geschrieben
+            CCW.CheckParamWrite(requester);
+            JObject plan = CCW.PlanSetParameters(a);
             preview = (JArray)plan["vorschau"];
             frozen = new JObject();
             frozen["_plan"] = plan;
@@ -1448,6 +1678,48 @@ static class AcmpMcp
         string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester, KIOSK.PreviewImage(plan));
         Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
         return WithPreviews(TextOut(APPROVAL.PendingMessage(id)), KIOSK.ChatPreviews(plan));
+    }
+
+    // Freigabe-Anfrage fuer acmp_wum_decline / acmp_wum_restore: vorher pruefen, Plan (Stand der Updates) einfrieren; genau dieser Plan wird geschrieben
+    static JObject GateWumTool(string name, JObject a, string requester)
+    {
+        WUM.CheckWrite(requester, name == "acmp_wum_restore" ? "restore" : "decline");
+        JObject plan = WUM.Plan(name, a, requester);
+        JArray preview = (JArray)plan["vorschau"];
+        var frozen = new JObject();
+        frozen["_plan"] = plan;
+        string intent = a["intent"] != null ? (string)a["intent"] : null;
+        string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester);
+        Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
+        return TextOut(APPROVAL.PendingMessage(id));
+    }
+
+    // Freigabe-Anfrage fuer acmp_unix_script_*: vorher pruefen, Plan (Inhalt mit SHA-256, Stand) einfrieren; genau dieser Plan wird geschrieben
+    static JObject GateUnixTool(string name, JObject a, string requester)
+    {
+        UNIX.CheckWrite(requester, name);
+        JObject plan = UNIX.Plan(name, a, requester);
+        JArray preview = (JArray)plan["vorschau"];
+        var frozen = new JObject();
+        frozen["_plan"] = plan;
+        string intent = a["intent"] != null ? (string)a["intent"] : null;
+        string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester);
+        Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
+        return TextOut(APPROVAL.PendingMessage(id));
+    }
+
+    // Freigabe-Anfrage fuer acmp_cf_create: vorher pruefen, Plan (neue Ids, Stand der Tabelle) einfrieren; genau dieser Plan wird geschrieben
+    static JObject GateCfTool(string name, JObject a, string requester)
+    {
+        CF.CheckWrite(requester);
+        JObject plan = CF.Plan(a, requester);
+        JArray preview = (JArray)plan["vorschau"];
+        var frozen = new JObject();
+        frozen["_plan"] = plan;
+        string intent = a["intent"] != null ? (string)a["intent"] : null;
+        string id = APPROVAL.EnqueueLocal(name, frozen.ToString(Formatting.None), preview, intent, requester);
+        Log(name + " von " + requester + ": Freigabe-Anfrage " + id);
+        return TextOut(APPROVAL.PendingMessage(id));
     }
 
     // ---------- Pro-User-Identitaeten / Verbindungspool ----------
@@ -2141,6 +2413,104 @@ static class AcmpMcp
             // Immer ueber die Freigabe wie acmp_cc_release (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
             if (!CcReleaseGateAvailable())
                 throw new Exception("acmp_cc_new_version laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv und ccWriter.approvalGate=true) - nichts geschrieben. Sonst die neue Version in der ACMP-Console anlegen.");
+            a.Remove("_plan");
+            return GateCcTool(name, a, requester);
+        }
+        if (name == "acmp_wum_declined")
+        {
+            RequireDb();
+            bool wst = a["status"] != null && a["status"].Type == JTokenType.Boolean && (bool)a["status"];
+            JObject wl = WUM.ListUpdates(a);
+            if (wst) wl["schreiber"] = WUM.Status(true);
+            return TextOut(wl.ToString(Formatting.Indented));
+        }
+        if (name == "acmp_wum_decline" || name == "acmp_wum_restore")
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = WUM.Plan(name, a, requester);
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            // Immer ueber die Freigabe - bypassAll und Zaehlwert 0 gelten hier nicht (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
+            if (APPROVAL == null || !APPROVAL.Enabled)
+                throw new Exception(name + " laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv) - nichts geschrieben. Sonst in der ACMP-Console ablehnen bzw. aufheben.");
+            a.Remove("_plan");
+            return GateWumTool(name, a, requester);
+        }
+        if (name == "acmp_unix_scripts")
+        {
+            RequireDb();
+            JObject us = UNIX.Scripts(a);
+            if (a["status"] != null && a["status"].Type == JTokenType.Boolean && (bool)a["status"]) us["schreiber"] = UNIX.Status(true);
+            return TextOut(us.ToString(Formatting.Indented));
+        }
+        if (name == "acmp_unix_results")
+        {
+            RequireDb();
+            return TextOut(UNIX.Results(a).ToString(Formatting.Indented));
+        }
+        if (AcmpUnix.IsWriteTool(name))
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = UNIX.Plan(name, a, requester);
+                plan.Remove("content");   // steht in der Anfrage; die Vorschau zeigt ihn
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            // Immer ueber die Freigabe - bypassAll und Zaehlwert 0 gelten hier nicht (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
+            if (APPROVAL == null || !APPROVAL.Enabled)
+                throw new Exception(name + " laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv) - nichts geschrieben. Sonst in der ACMP-Console.");
+            a.Remove("_plan");
+            return GateUnixTool(name, a, requester);
+        }
+        if (name == "acmp_cf_list")
+        {
+            RequireDb();
+            JObject cl = CF.List(a);
+            if (a["status"] != null && a["status"].Type == JTokenType.Boolean && (bool)a["status"]) cl["schreiber"] = CF.Status(true);
+            return TextOut(cl.ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cf_create")
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = CF.Plan(a, requester);
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            // Immer ueber die Freigabe - bypassAll und Zaehlwert 0 gelten hier nicht (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
+            if (APPROVAL == null || !APPROVAL.Enabled)
+                throw new Exception(name + " laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv) - nichts geschrieben. Sonst in der ACMP-Console anlegen.");
+            a.Remove("_plan");
+            return GateCfTool(name, a, requester);
+        }
+        if (name == "acmp_cc_parameters")
+        {
+            RequireDb();
+            return TextOut(CCW.Parameters(a).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_cc_set_parameters")
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = CCW.PlanSetParameters(a);
+                plan.Remove("params");   // die Vorschau zeigt sie lesbar
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            // Immer ueber die Freigabe wie acmp_cc_new_version (AlwaysGatedTools). Ein mitgegebenes _plan wird ignoriert.
+            if (!CcReleaseGateAvailable())
+                throw new Exception("acmp_cc_set_parameters laeuft nur ueber die Vier-Augen-Freigabe (approval-Section aktiv und ccWriter.approvalGate=true) - nichts geschrieben. Sonst in der ACMP-Console (Eigenschaften -> Parameter).");
             a.Remove("_plan");
             return GateCcTool(name, a, requester);
         }

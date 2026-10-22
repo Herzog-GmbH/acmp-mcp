@@ -36,7 +36,7 @@
   },
 
   "ccWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Legt Client Commands als ENTWURF direkt in der ACMP-Datenbank an: acmp_cc_create_draft, _update_draft, _restore_draft, _add_file, _remove_file und acmp_lib_install. Dazu acmp_cc_release (eigene Entwuerfe und neue Versionen aus acmp_cc_new_version freigeben, IMMER mit Freigabe-Anfrage), acmp_cc_new_version (neue Version eines vorhandenen, auch freigegebenen Commands als Entwurf, IMMER mit Freigabe-Anfrage), acmp_cc_move / acmp_cc_add_folder / acmp_cc_update_folder (Client-Command-Ordner). Direktes Schreiben in die DB ist von Aagon nicht vorgesehen - nur mit Testordner, eigenem SQL-Login (grant-cc-writer.sql) und DB-Sicherung. Einrichten mit setup-cc-writer.ps1 (als Admin), Anleitung in docs/ACMP-VORBEREITUNG.md. Jede Schreibaktion laeuft ueber die Vier-Augen-Freigabe (approvalGate) und nur nach bestandener Kompatibilitaetspruefung (Tool acmp_cc_writer_status). Lesen (acmp_cc_decode, acmp_cc_catalog, acmp_cc_folders) braucht nur db.connectionString. moveScopeFolderIds (optional): Ordner-Tools nur innerhalb dieser Ordner samt Unterordnern. versionScopeFolderIds (optional): acmp_cc_new_version nur fuer Commands in diesen Ordnern samt Unterordnern (leer = alle ausser den Aagon-Standardordnern).",
+    "_hinweis": "Optional, standardmaessig AUS. Legt Client Commands als ENTWURF direkt in der ACMP-Datenbank an: acmp_cc_create_draft, _update_draft, _restore_draft, _add_file, _remove_file und acmp_lib_install. Dazu acmp_cc_release (eigene Entwuerfe und neue Versionen aus acmp_cc_new_version freigeben, IMMER mit Freigabe-Anfrage), acmp_cc_new_version (neue Version eines vorhandenen, auch freigegebenen Commands als Entwurf, IMMER mit Freigabe-Anfrage), acmp_cc_move / acmp_cc_add_folder / acmp_cc_update_folder (Client-Command-Ordner), acmp_cc_set_parameters (Parameter eines Commands, IMMER mit Freigabe-Anfrage, Rechte: grant-cf-params.sql Abschnitt 3). Direktes Schreiben in die DB ist von Aagon nicht vorgesehen - nur mit Testordner, eigenem SQL-Login (grant-cc-writer.sql) und DB-Sicherung. Einrichten mit setup-cc-writer.ps1 (als Admin), Anleitung in docs/ACMP-VORBEREITUNG.md. Jede Schreibaktion laeuft ueber die Vier-Augen-Freigabe (approvalGate) und nur nach bestandener Kompatibilitaetspruefung (Tool acmp_cc_writer_status). Lesen (acmp_cc_decode, acmp_cc_catalog, acmp_cc_folders) braucht nur db.connectionString. moveScopeFolderIds (optional): Ordner-Tools nur innerhalb dieser Ordner samt Unterordnern. versionScopeFolderIds (optional): acmp_cc_new_version nur fuer Commands in diesen Ordnern samt Unterordnern (leer = alle ausser den Aagon-Standardordnern).",
     "enabled": false,
     "connectionString": "Server=HIER_SQL_INSTANZ;Database=ACMP;User ID=acmp_mcp_ccwriter;Password=HIER_KENNWORT;Application Name=ACMP-MCP-CcWriter;Connect Timeout=15",
     "templateScriptId": "HIER_GUID_VORLAGE",
@@ -62,6 +62,32 @@
     "imageSourceRoots": [],
     "maxImageKB": 512,
     "backupDir": "kiosk-backups"
+  },
+
+  "wumWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Windows-Updates der ACMP-Update-Verwaltung ablehnen und die Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore), IMMER mit Freigabe-Anfrage, hoechstens 10 Updates je Auftrag, Pflicht-Kommentar. Lesen (acmp_wum_declined) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-wum-writer.sql). rebuildFlags: nach dem Schreiben das Flag IsDeclined sofort neu aufbauen (sonst beim naechsten Lauf von ACMP). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_wum_declined mit status=true.",
+    "enabled": false,
+    "approvalGate": true,
+    "allowUntested": false,
+    "rebuildFlags": true,
+    "backupDir": "wum-backups"
+  },
+
+  "unixWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Unix Scripts (ab ACMP 6.10) anlegen, neue Version und Verteilungsring setzen (acmp_unix_script_create, _new_version, _set_ring), IMMER mit Freigabe-Anfrage. Die Skripte laufen auf den Clients als root. Einen Job starten kann der MCP nicht, das bleibt in der ACMP-Console. Lesen (acmp_unix_scripts, acmp_unix_results) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-unix-writer.sql). allowedFolderIds (optional): nur in diesen Unix-Script-Ordnern schreiben (leer = alle). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_unix_scripts mit status=true.",
+    "enabled": false,
+    "allowedFolderIds": [],
+    "approvalGate": true,
+    "allowUntested": false,
+    "backupDir": "unix-backups"
+  },
+
+  "cfWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Individuelle Felder (Client-Tabellen, Ganzzahl und Text) anlegen wie in der ACMP-Console (acmp_cf_create), IMMER mit Freigabe-Anfrage. Die DDL laeuft ueber zwei Prozeduren aus grant-cf-params.sql, der Login selbst bekommt keine DDL-Rechte. Lesen (acmp_cf_list, auch Werte je Client) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen. Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_cf_list mit status=true.",
+    "enabled": false,
+    "approvalGate": true,
+    "allowUntested": false,
+    "backupDir": "cf-backups"
   },
 
   "approval": {

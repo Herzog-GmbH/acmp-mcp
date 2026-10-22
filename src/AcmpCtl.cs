@@ -616,7 +616,7 @@ class AcmpCtl
     }
 
     // Vereinigt die Eintraege eines Stored*-JSON aller Schritte (Schluessel Id) zu {"<key>":[...]}; null = keine
-    static string CollectStored(JArray steps, string key)
+    internal static string CollectStored(JArray steps, string key)
     {
         var list = new JArray(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         CollectStoredRec(steps, key, list, seen);

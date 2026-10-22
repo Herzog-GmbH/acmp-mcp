@@ -368,6 +368,13 @@ class AcmpApproval
         {
             steps.Add(tool == "acmp_cc_release" ? "Gibt Client Commands direkt in der ACMP-Datenbank frei (danach per Kiosk/Job ausführbar):"
                     : tool == "acmp_cc_new_version" ? "Legt eine neue Version eines vorhandenen Client Commands als Entwurf an (wirksam erst nach Freigabe in der Console):"
+                    : tool == "acmp_wum_decline" ? "Lehnt Windows-Updates in der ACMP-Update-Verwaltung ab (Clients bekommen sie nicht mehr angeboten):"
+                    : tool == "acmp_wum_restore" ? "Hebt die Ablehnung von Windows-Updates in der ACMP-Update-Verwaltung auf (Clients bekommen sie wieder angeboten):"
+                    : tool == "acmp_unix_script_create" ? "Legt ein neues Unix Script an (läuft auf Linux/macOS als root, sobald es freigegeben und in der Console gestartet wird):"
+                    : tool == "acmp_unix_script_new_version" ? "Legt eine neue Version eines Unix Scripts an (wirksam erst nach Freigabe über den Verteilungsring):"
+                    : tool == "acmp_unix_script_set_ring" ? "Ändert den Verteilungsring einer Unix-Script-Version (255 = freigegeben, läuft beim nächsten Unix-Job):"
+                    : tool == "acmp_cf_create" ? "Legt individuelle Felder in der ACMP-Datenbank an (neue Spalte bzw. Tabelle, wie Speichern in der Console; Löschen nur in der Console):"
+                    : tool == "acmp_cc_set_parameters" ? "Setzt die Parameter eines Client Commands (wirkt sofort auf neue Jobs und den Kiosk):"
                                                 : "Schreibt direkt in die ACMP-Datenbank (CC-Writer, nur Entwürfe):");
             int shown = 0;
             foreach (JToken t in pv)

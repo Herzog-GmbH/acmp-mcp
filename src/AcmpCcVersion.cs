@@ -65,13 +65,19 @@ partial class AcmpCcWriter
     // wie in der Anfrage. Gibt eine Kopie zurueck.
     public static JArray NormalizeStepIds(JArray steps, Func<string> newId)
     {
+        return NormalizeStepIds(steps, newId, null);
+    }
+
+    // keepOnly != null: nur diese IDs behalten (acmp_cc_update_draft: die des Entwurfs), alle anderen neu - keine IDs fremder Commands
+    public static JArray NormalizeStepIds(JArray steps, Func<string> newId, ICollection<string> keepOnly)
+    {
         if (steps == null || steps.Count == 0) throw new Exception("steps fehlt oder ist leer.");
         var copy = (JArray)steps.DeepClone();
-        NormIds(copy, new HashSet<string>(StringComparer.OrdinalIgnoreCase), newId);
+        NormIds(copy, new HashSet<string>(StringComparer.OrdinalIgnoreCase), newId, keepOnly);
         return copy;
     }
 
-    static void NormIds(JArray steps, HashSet<string> used, Func<string> newId)
+    static void NormIds(JArray steps, HashSet<string> used, Func<string> newId, ICollection<string> keepOnly)
     {
         foreach (JToken t in steps)
         {
@@ -85,17 +91,17 @@ partial class AcmpCcWriter
                 if (idEl != null)
                 {
                     string g = GuidBraces(idEl.InnerText);
-                    if (g == null || !used.Add(g)) { g = newId(); used.Add(g); idEl.InnerText = g; st["xml"] = doc.DocumentElement.OuterXml; }
+                    if (g == null || (keepOnly != null && !keepOnly.Contains(g)) || !used.Add(g)) { g = newId(); used.Add(g); idEl.InnerText = g; st["xml"] = doc.DocumentElement.OuterXml; }
                 }
             }
             else
             {
                 string g = GuidBraces(st["id"] != null && st["id"].Type == JTokenType.String ? (string)st["id"] : null);
-                if (g == null || !used.Add(g)) { g = newId(); used.Add(g); }
+                if (g == null || (keepOnly != null && !keepOnly.Contains(g)) || !used.Add(g)) { g = newId(); used.Add(g); }
                 st["id"] = g;
             }
             JArray ch = st["children"] as JArray;
-            if (ch != null) NormIds(ch, used, newId);
+            if (ch != null) NormIds(ch, used, newId, keepOnly);
         }
     }
 
@@ -138,12 +144,12 @@ partial class AcmpCcWriter
         if (con == null || con.Roots.Count == 0)
         {
             var e = new CcScript(); e.Kind = 0; e.Vars = vars;
-            if (con != null && con.Format == 13) e.ChangeLog = con.ChangeLog;
+            if (con != null && con.Format == 13) { e.ChangeLog = con.ChangeLog; e.Head1Raw = con.Head1Raw; e.Head2Raw = con.Head2Raw; e.Head6Raw = con.Head6Raw; }
             return e;
         }
         if (con.Format != 13 || con.TreeVersion != 3)
             throw new Exception("Console-Skript der Basisversion hat Schritte im Altformat " + con.Format + " - neue Version in der ACMP-Console anlegen.");
-        con.Kind = 0; con.Vars = vars;
+        con.Vars = vars;   // Art (Kind) wie gelesen: bei Console-Commands ist das Console-Skript das aktive (1)
         notes.Add("Console-Skript (" + CountSteps(con.Roots) + " Schritt(e)) unveraendert uebernommen, nur die Variablenliste angeglichen.");
         return con;
     }
@@ -237,6 +243,53 @@ partial class AcmpCcWriter
 
     static string OaText(double? d) { return d.HasValue ? DateTime.FromOADate(d.Value).ToString("dd.MM.yyyy HH:mm") : "?"; }
 
+    // ================= Individuelle Felder in Schritten (seit 22.10.2026) =================
+
+    // Kurzform {"class":"TStoreValueOnACMPServer","fields":{"CustomField":"<Name oder GUID>","Table":"<optional>","Value":"%VAR%"}} vorhanden?
+    static bool HasCfShorthand(JArray steps)
+    {
+        if (steps == null) return false;
+        foreach (JToken t in steps)
+        {
+            JObject st = t as JObject; if (st == null) continue;
+            JObject f = st["fields"] as JObject;
+            if ((string)st["class"] == "TStoreValueOnACMPServer" && f != null && f["CustomField"] != null) return true;
+            if (HasCfShorthand(st["children"] as JArray)) return true;
+        }
+        return false;
+    }
+
+    // Kurzform mit den Metadaten aus der DB fuellen (Tabellen-/Spaltenname, FieldType, Kopf-JSON wie die Console); sonst unveraendert
+    internal static JArray ExpandCustomFieldSteps(SqlConnection c, JArray steps, List<string> notes)
+    {
+        if (!HasCfShorthand(steps)) return steps;
+        return AcmpCustomFields.ExpandStoreSteps(steps, (f, t) => AcmpCustomFields.ResolveWith(c, f, t), notes);
+    }
+
+    public JArray ExpandCustomFieldSteps(JArray steps, List<string> notes)
+    {
+        if (!HasCfShorthand(steps)) return steps;
+        if (string.IsNullOrEmpty(_readCs)) throw new Exception("DB-Lesezugang (db.connectionString) fehlt - CustomField-Kurzform nicht aufloesbar.");
+        using (var c = new SqlConnection(_readCs)) { c.Open(); return ExpandCustomFieldSteps(c, steps, notes); }
+    }
+
+    // Kopf-JSON (StoredCustomFields/-Tables/-Folders) wie die Console aus den Schritten "Wert auf Server speichern". Liefern die Schritte nichts,
+    // bleibt der Kopf (Basis bzw. leer); bei gleichem Inhalt bleibt der Text der Basis, damit der Rundlauf bytegleich bleibt.
+    internal static void ApplyStoredHeader(CcScript s, JArray steps)
+    {
+        if (steps == null) return;
+        s.StoredCustomFields = MergeHeader(s.StoredCustomFields, AcmpCtl.CollectStored(steps, "StoredCustomFields"));
+        s.StoredTables = MergeHeader(s.StoredTables, AcmpCtl.CollectStored(steps, "StoredTables"));
+        s.StoredFolders = MergeHeader(s.StoredFolders, AcmpCtl.CollectStored(steps, "StoredFolders"));
+    }
+
+    static string MergeHeader(string current, string fromSteps)
+    {
+        if (fromSteps == null) return current;
+        if (current != null) { try { if (JToken.DeepEquals(JToken.Parse(current), JToken.Parse(fromSteps))) return current; } catch { } }
+        return fromSteps;
+    }
+
     // ================= DB =================
 
     // Alle Versionen, neueste zuerst. tx != null: in der Schreib-Transaktion mit Sperre lesen.
@@ -308,9 +361,11 @@ partial class AcmpCcWriter
             client.StoredCustomFields = baseClient.StoredCustomFields; client.StoredCustomFieldsRaw = baseClient.StoredCustomFieldsRaw;
             client.StoredTables = baseClient.StoredTables; client.StoredTablesRaw = baseClient.StoredTablesRaw;
             client.StoredFolders = baseClient.StoredFolders; client.StoredFoldersRaw = baseClient.StoredFoldersRaw;
+            client.Head1Raw = baseClient.Head1Raw; client.Head2Raw = baseClient.Head2Raw; client.Head6Raw = baseClient.Head6Raw;
         }
         else if (baseClient != null)
             notes.Add("Client-Skript der Basis im Altformat " + baseClient.Format + " - neue Version im aktuellen Format 13, Aenderungsprotokoll beginnt neu.");
+        ApplyStoredHeader(client, normSteps);
         cb = CcFormat.Encode(client);
         CcScript console = ConsoleFor(top.Console, client.Vars, notes);
         ob = CcFormat.Encode(console);
@@ -329,12 +384,14 @@ partial class AcmpCcWriter
         JArray steps = a["steps"] as JArray;
         if (steps == null && a["steps"] != null && a["steps"].Type == JTokenType.String && ((string)a["steps"]).Trim().StartsWith("["))
             steps = JArray.Parse((string)a["steps"]);
-        JArray normSteps = NormalizeStepIds(steps, NewGuid);
         bool replaceDraft = a["replaceDraft"] != null && a["replaceDraft"].Type == JTokenType.Boolean && (bool)a["replaceDraft"];
         string longDesc = a["longDescription"] != null && a["longDescription"].Type == JTokenType.String ? (string)a["longDescription"] : null;
         using (var c = new SqlConnection(_readCs))
         {
             c.Open();
+            // Kurzform "Wert auf Server speichern" mit CustomField aufloesen (eingefroren im Plan), dann Schritt-IDs festlegen
+            var cfNotes = new List<string>();
+            JArray normSteps = NormalizeStepIds(ExpandCustomFieldSteps(c, steps, cfNotes), NewGuid);
             JObject cmd = ResolveCommand(c, arg);
             string id = (string)cmd["scriptId"];
             List<CcVersionRow> rows = LoadVersions(c, null, id);
@@ -370,6 +427,7 @@ partial class AcmpCcWriter
 
             byte[] cb, ob; List<string> notes; int secrets;
             CcScript client = BuildVersion(normSteps, vars, top, released, out cb, out ob, out notes, out secrets);
+            notes.InsertRange(0, cfNotes);
             int newVer = mode == "insert" ? top.Version + 1 : top.Version;
             CcFolder f; folders.TryGetValue(top.FolderId, out f);
             int files = FileCount(c, id, top.FileRepoVersion);

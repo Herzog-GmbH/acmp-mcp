@@ -1,6 +1,8 @@
 // AcmpCcFormat: Lesen und Schreiben des ACMP-Client-Command-Formats (SYS_SCRIPTS.CLIENTSCRIPT / CONSOLESCRIPT).
 // Aufbau (entschluesselt 13.10.2026, ACMP 6.9.3):
-//   raw Deflate( Kopf | Projektvariablen | 2 leere + 3 JSON-EncStrings + 1 leerer | Art | VirtualTreeView-Stream | Aenderungsprotokoll )
+//   raw Deflate( Kopf | Projektvariablen | 6 EncStrings (1, 2, 6 meist leer; 3-5 JSON) | Art | VirtualTreeView-Stream | Aenderungsprotokoll )
+//   Block 1 ist nicht immer leer: Aagons „ACMP Unix Agent verteilen & Inventory" {1F5A4238-…} (Console-Skript) hat dort
+//   Deflate("PYTHON\r\nSTDOUT\r\n") - eine Namensliste, vermutlich die beobachteten Variablen des Debuggers (gefunden 22.10.2026).
 //   Strings = int32-Laenge + UTF-8. EncString = String "[Encoding:UTF8]" + int32-Laenge + Daten.
 //   Baumknoten: NodeChunk(1){ BaseChunk(2){19 Byte + Kind-NodeChunks} UserChunk(4){Klasse, EncString(Deflate-XML)} }
 //   Altformat 12 (Aagon-Vorlagen, z.B. „Send Message"): nach „Art" kein int32 0, VirtualTreeView-Stream-Version 2
@@ -39,7 +41,9 @@ class CcScript
     public int TotalSteps;             // nur beim Lesen; beim Schreiben berechnet
     public int Format = 13;            // nur beim Lesen: Formatkennung (12 = Altformat, 13 = aktuell)
     public int TreeVersion = 3;        // nur beim Lesen: VirtualTreeView-Stream-Version (2 oder 3)
-    public int Kind = 1;              // 1 = Client-Skript, 0 = Console-Skript
+    public int TreeOffset, ChangeLogOffset;   // nur beim Lesen: Beginn des Baums bzw. des Aenderungsprotokolls im entpackten Strom
+    public int Kind = 1;              // 1 = Client-Skript, 0 = Console-Skript (bei Client Commands). Genauer wohl „aktives Skript": beim
+                                      // Console-Command {1F5A4238-…} ist es umgekehrt (Client 0, Console 1). Beim Lesen uebernommen.
     public List<CcVar> Vars = new List<CcVar>();
     public List<CcNode> Roots = new List<CcNode>();
     public byte[] ChangeLog;           // Rohbytes nach dem Baum (int32 Anzahl + Eintraege); null = leeres Protokoll
@@ -47,6 +51,9 @@ class CcScript
     public string StoredCustomFields, StoredTables, StoredFolders;
     // nur beim Lesen: die Bloecke so komprimiert, wie ACMP sie abgelegt hat (Rundlauf-Pruefung); Encode nimmt sie, solange der Text gleich ist
     public byte[] StoredCustomFieldsRaw, StoredTablesRaw, StoredFoldersRaw;
+    // Kopfbloecke 1, 2 und 6 (Bedeutung nicht gesichert, Block 1 = Namensliste, s.o.): beim Lesen roh uebernommen und unveraendert
+    // zurueckgeschrieben, damit ein Rundlauf bytegleich bleibt; null = leer (neue Skripte)
+    public byte[] Head1Raw, Head2Raw, Head6Raw;
     public List<string> Warnings = new List<string>();
 }
 
@@ -83,12 +90,12 @@ static class CcFormat
             WriteStr(w, v.Value ?? "");
             w.Write((byte)(v.ReadOnly ? 1 : 0));
         }
-        WriteEnc(w, new byte[0]);
-        WriteEnc(w, new byte[0]);
+        WriteEnc(w, s.Head1Raw ?? new byte[0]);
+        WriteEnc(w, s.Head2Raw ?? new byte[0]);
         WriteEnc(w, JsonBlock(s.StoredCustomFields, s.StoredCustomFieldsRaw, Json1));
         WriteEnc(w, JsonBlock(s.StoredTables, s.StoredTablesRaw, Json2));
         WriteEnc(w, JsonBlock(s.StoredFolders, s.StoredFoldersRaw, Json3));
-        WriteEnc(w, new byte[0]);
+        WriteEnc(w, s.Head6Raw ?? new byte[0]);
         w.Write(s.Kind);
         w.Write(0);
         w.Write(Magic);
@@ -186,14 +193,15 @@ static class CcFormat
             s.Vars.Add(v);
         }
         byte[] e;
-        e = EncData(raw, ref p); if (e.Length != 0) s.Warnings.Add("EncString 1 nicht leer");
-        e = EncData(raw, ref p); if (e.Length != 0) s.Warnings.Add("EncString 2 nicht leer");
+        e = EncData(raw, ref p); if (e.Length != 0) s.Head1Raw = e;
+        e = EncData(raw, ref p); if (e.Length != 0) s.Head2Raw = e;
         e = EncData(raw, ref p); if (!Same(e, 0, Json1) || e.Length != Json1.Length) { s.StoredCustomFields = Utf8(Inflate(e, 0, e.Length)); s.StoredCustomFieldsRaw = e; s.Warnings.Add("StoredCustomFields: " + s.StoredCustomFields); }
         e = EncData(raw, ref p); if (!Same(e, 0, Json2) || e.Length != Json2.Length) { s.StoredTables = Utf8(Inflate(e, 0, e.Length)); s.StoredTablesRaw = e; s.Warnings.Add("StoredTables: " + s.StoredTables); }
         e = EncData(raw, ref p); if (!Same(e, 0, Json3) || e.Length != Json3.Length) { s.StoredFolders = Utf8(Inflate(e, 0, e.Length)); s.StoredFoldersRaw = e; s.Warnings.Add("StoredFolders: " + s.StoredFolders); }
-        e = EncData(raw, ref p); if (e.Length != 0) s.Warnings.Add("EncString 6 nicht leer");
+        e = EncData(raw, ref p); if (e.Length != 0) s.Head6Raw = e;
         s.Kind = I32(raw, ref p);
         if (fmt >= 13) { int z = I32(raw, ref p); if (z != 0) s.Warnings.Add("Feld nach Art = " + z); }
+        s.TreeOffset = p;
         if (!Same(raw, p, MagicHead) || !Same(raw, p + 8, MagicTail))
             throw new Exception("VirtualTreeView-Kennung nicht an erwarteter Stelle (Offset " + p + ", Formatkennung " + fmt + ").");
         s.TreeVersion = BitConverter.ToUInt16(raw, p + 6);
@@ -202,6 +210,7 @@ static class CcFormat
         int baseBody = s.TreeVersion >= 3 ? BaseBody : 17;
         int roots = I32(raw, ref p);
         for (int i = 0; i < roots; i++) s.Roots.Add(ReadNode(raw, ref p, baseBody));
+        s.ChangeLogOffset = p;
         s.ChangeLog = new byte[raw.Length - p];
         Buffer.BlockCopy(raw, p, s.ChangeLog, 0, s.ChangeLog.Length);
         int total = 0; foreach (var n in s.Roots) total += Count(n);
@@ -247,6 +256,14 @@ static class CcFormat
     // ---------------- Hilfen ----------------
 
     public static string StepXml(string body) { return XmlDecl + body; }
+
+    // Kopfblock lesbar (nur Anzeige): entpackter Text, Zeilen mit ", " verbunden; null = leer
+    public static string HeadText(byte[] raw)
+    {
+        if (raw == null) return null;
+        try { return string.Join(", ", Utf8(Inflate(raw, 0, raw.Length)).Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)); }
+        catch { return "(" + raw.Length + " Byte, nicht entpackbar)"; }
+    }
 
     public static byte[] Deflate(byte[] data)
     {

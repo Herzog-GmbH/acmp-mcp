@@ -47,6 +47,7 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 - „Gib den Entwurf frei." → `acmp_cc_release` (immer mit Freigabe-Anfrage)
 - „Im Command ‚Druckertreiber installieren‘ fehlt der Exit-Code-Check, bau das als neue Version ein." → `acmp_cc_decode`, dann `acmp_cc_new_version` (Vorschau mit den Änderungen), danach `acmp_cc_release` („Gib die neue Version frei.“)
 - „Leg unter ‚Software‘ einen Ordner ‚Office‘ an und verschieb alle Office-Commands dorthin." → `acmp_cc_add_folder`, `acmp_cc_move`
+- „Gib dem Command ‚Datenträger prüfen‘ einen Parameter ‚Vollscan‘ mit Ja/Nein, Standard Nein." → `acmp_cc_parameters`, dann `acmp_cc_set_parameters` (immer mit Freigabe-Anfrage)
 
 ## 6) Kiosk (optional, Kiosk-Writer)
 - „Wie ist der Kiosk aufgebaut, und wer sieht was?" → `acmp_kiosk_tree` (Filter im Klartext)
@@ -54,6 +55,15 @@ zeigt typische Formulierungen pro Bereich. **Lesen** ist gefahrlos; **Schreiben/
 - „Zeig mir passende Icons für 7-Zip." → `acmp_kiosk_images` mit Vorschau, dann `acmp_kiosk_set_image`
 - „Benenn den Kiosk-Ordner ‚Tools‘ in ‚Werkzeuge‘ um." → `acmp_kiosk_update_group`
 - „Mach die letzte Kiosk-Änderung rückgängig." → `acmp_kiosk_restore`
+
+## 7) Windows-Updates, Unix Scripts, individuelle Felder (optional)
+- „Welche Updates haben wir abgelehnt, und warum?" → `acmp_wum_declined`
+- „Welche offenen Updates scheitern am häufigsten?" → `acmp_wum_declined` mit `scope: open`
+- „Lehn den fehlerhaften Treiber ‚…‘ ab, Kommentar: ‚bricht den Druck ab, Ticket 1234‘." → `acmp_wum_decline` (immer mit Freigabe-Anfrage), zurück mit `acmp_wum_restore`
+- „Welche Unix Scripts gibt es, und welche Version ist freigegeben?" → `acmp_unix_scripts`
+- „Leg ein Bash-Skript an, das den freien Platz unter /var meldet, erst in Testring 1." → `acmp_unix_script_create`, Freigabe danach mit `acmp_unix_script_set_ring` (`ring: 255`). Den Job startet ihr in der Console.
+- „Was hat das Skript auf dem Server ‚linux-web-01‘ ausgegeben?" → `acmp_unix_results`
+- „Leg ein individuelles Feld ‚Scan Status‘ (Ganzzahl 0 bis 9) für Clients an." → `acmp_cf_list`, dann `acmp_cf_create` (immer mit Freigabe-Anfrage)
 
 ## Wenn etwas nicht klappt
 - ACMP liefert sprechende Fehler, z.B. *„ClientCommandId: Value may not be empty"* – die KI erkennt

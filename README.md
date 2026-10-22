@@ -6,7 +6,7 @@
 
 [![Getestet mit ACMP 6.9 und 6.10](https://img.shields.io/badge/getestet%20mit-ACMP%206.9%20%7C%206.10-0067b8)](#kompatibilität)
 [![MCP Streamable HTTP](https://img.shields.io/badge/MCP-Streamable%20HTTP-6f42c1)](https://modelcontextprotocol.io/)
-[![118 Tools](https://img.shields.io/badge/Tools-118-2ea44f)](#tools)
+[![130 Tools](https://img.shields.io/badge/Tools-130-2ea44f)](#tools)
 [![Vier-Augen-Freigabe](https://img.shields.io/badge/Freigabe-Vier--Augen-e36209)](#so-sieht-die-freigabe-aus)
 <br>
 [![Windows Server](https://img.shields.io/badge/Plattform-Windows%20Server-0078d4)](#kompatibilität)
@@ -30,7 +30,7 @@ Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** 
 - **Vier-Augen-Freigabe:** Lesen läuft sofort. Alles, was etwas verändert, ausführt oder löscht, läuft erst, wenn ein Mensch auf der Freigabe-Seite zustimmt, bei kritischen Aktionen zwei verschiedene Personen.
 - **Pro Bediener:** eigener API-Key und optional eigene ACMP-Identität. ACMP prüft dann die echten Rechte der Person.
 - **Eine EXE, keine Cloud:** läuft direkt auf dem ACMP-Server. Kein IIS, kein .NET-SDK.
-- **Optional:** Client Commands anlegen, freigeben und einsortieren sowie den **Kiosk** pflegen, direkt in der ACMP-Datenbank. Standardmäßig aus.
+- **Optional:** Client Commands anlegen, freigeben, einsortieren und mit Parametern versehen, den **Kiosk** pflegen, **Windows-Updates ablehnen**, **Unix Scripts** schreiben und **individuelle Felder** anlegen, direkt in der ACMP-Datenbank. Standardmäßig aus.
 - **Fertige Vorlagen:** In der [ACMP CTL](https://herzog-gmbh.github.io/acmp-ctl/) (Community Template Library) liegen Client-Command-Vorlagen mit jedem Schritt im Klartext. `acmp_lib_install` legt sie als Entwurf in eurer Console an.
 
 ## Kompatibilität
@@ -38,7 +38,7 @@ Ein [MCP](https://modelcontextprotocol.io/)-Server für die **ACMP Public API** 
 | | Getestet bzw. vorausgesetzt |
 |---|---|
 | **ACMP** | 6.9 und 6.10, mit AESB/SICS und freigeschalteter Public API |
-| **CC-Writer / Kiosk-Writer** | ACMP 6.10. Bei Abweichungen, etwa nach einem ACMP-Update, sperrt die Vorprüfung das Schreiben |
+| **Schreib-Tools an der Datenbank** (CC-, Kiosk-, WUM-, Unix-Script- und Feld-Writer) | ACMP 6.10 (Unix Scripts gibt es erst ab 6.10). Bei Abweichungen, etwa nach einem ACMP-Update, sperrt die Vorprüfung das Schreiben |
 | **Server** | Windows Server mit .NET Framework 4.8, Admin-Rechte auf dem ACMP-Server |
 | **MCP** | Streamable HTTP (JSON-RPC 2.0), Protokollversion `2025-06-18` |
 | **KI-Clients** | Vorlagen für Claude Code, Claude Desktop (auch als Erweiterung `.mcpb`), Codex CLI, VS Code/GitHub Copilot, Cursor und Gemini CLI in [`docs/CLIENTS.md`](docs/CLIENTS.md) |
@@ -79,7 +79,7 @@ Bei jedem Schritt erklärt er, was passiert, und schlägt Werte vor (Enter über
 5. **Richtet den Dienst ein und prüft die Anmeldung an ACMP.** Klappt sie nicht, fragt er die Zugangsdaten erneut ab.
 6. **Legt dich als ersten Administrator und Freigeber an.**
 7. **Verknüpft deine eigene ACMP-Identität**, wenn du das möchtest. Dann prüft ACMP deine echten Rechte.
-8. **Optionale Funktionen:** Ad-hoc-PowerShell, DB-Reports, E-Mail-Benachrichtigung.
+8. **Optionale Funktionen:** Ad-hoc-PowerShell, DB-Reports, die Schreib-Tools an der Datenbank, E-Mail-Benachrichtigung.
 9. **Netzwerk:** schlägt LAN-IP und Subnetz vor und gibt den Server für die Admin-PCs frei.
 
 Die Klicks in der ACMP-Konsole beschreibt [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md), zum Beispiel für die Client-Command-Vorlage der Ad-hoc-PowerShell.
@@ -184,11 +184,11 @@ Darunter stehen der Roh-Befehl an ACMP, eine Schritt-für-Schritt-Erklärung mit
 
 ## Tools
 
-118 Tools in 10 Bereichen. Ein Klick auf einen Bereich zeigt alle Tools mit ihrer Freigabestufe:
+130 Tools in 11 Bereichen. Ein Klick auf einen Bereich zeigt alle Tools mit ihrer Freigabestufe:
 
 🟢 läuft sofort (nur lesen) · 🟡 Freigabe durch 1 Person · 🔴 Freigabe durch 2 verschiedene Personen
 
-Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/settings` anpassen. Manche Tools brauchen eine optionale Funktion: *(DB)* die Datenbank-Anbindung (`db.connectionString`, nur lesend), *(PS)* die Client-Command-Vorlage (`runPowershell.clientCommandId`), *(CW)* den CC-Writer (`ccWriter`), *(KW)* den Kiosk-Writer (`kioskWriter`). Die aktuelle Liste liefert `tools/list`. Jedes Tool akzeptiert optional `format: "json"`.
+Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/settings` anpassen. Manche Tools brauchen eine optionale Funktion: *(DB)* die Datenbank-Anbindung (`db.connectionString`, nur lesend), *(PS)* die Client-Command-Vorlage (`runPowershell.clientCommandId`), *(CW)* den CC-Writer (`ccWriter`), *(KW)* den Kiosk-Writer (`kioskWriter`), *(WW)* den WUM-Writer (`wumWriter`), *(UW)* den Unix-Script-Writer (`unixWriter`), *(FW)* den Feld-Writer (`cfWriter`). Die aktuelle Liste liefert `tools/list`. Jedes Tool akzeptiert optional `format: "json"`.
 
 <details>
 <summary><b>System &amp; Allgemein</b> · 11 Tools · Server-Info, eigene Rechte, <code>acmp_call</code> für jedes der 167 API-Kommandos</summary>
@@ -203,12 +203,12 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 | 🟢 | `acmp_approval_status` | Stand eines Freigabe-Antrags |
 | 🟢 | `acmp_discover_tables` *(DB)* | Tabellen in der ACMP-Datenbank suchen („Was hat mit BitLocker zu tun?“) |
 | 🟢 | `acmp_db_columns` *(DB)* | Spalten einer Tabelle oder View |
-| 🟢 | `acmp_db_script_rows`, `acmp_db_script_blob` *(beide DB)* | Zeilen und Binärspalten der Client-Command-, Kiosk- und File-Repository-Tabellen (nur diese) |
+| 🟢 | `acmp_db_script_rows`, `acmp_db_script_blob` *(beide DB)* | Zeilen und Binärspalten der Client-Command-, Kiosk-, Unix-Script- und File-Repository-Tabellen (nur diese) |
 
 </details>
 
 <details>
-<summary><b>Clients &amp; Inventar</b> · 12 Tools · „Wer war zuletzt an PC-0815?“, Hardware, Offline-Rechner, Plattenplatz</summary>
+<summary><b>Clients &amp; Inventar</b> · 14 Tools · „Wer war zuletzt an PC-0815?“, Hardware, Offline-Rechner, individuelle Felder</summary>
 
 | | Tool | Zweck |
 |---|---|---|
@@ -220,17 +220,21 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 | 🟢 | `acmp_low_disk_space` *(DB)* | Laufwerke mit wenig freiem Platz |
 | 🟢 | `acmp_read_registry`, `acmp_read_registry_result` *(beide PS)* | einen Registry-Wert vom Client lesen (festes Lese-Skript) |
 | 🟢 | `acmp_db_client_attributes` *(DB)* | benutzerdefinierte Felder eines Clients |
+| 🟢 | `acmp_cf_list` *(DB)* | individuelle Felder mit Tabelle, Spalte und Typ, auf Wunsch die Werte je Client |
+| 🟡 | `acmp_cf_create` *(FW)* | individuelle Felder für Clients anlegen wie in der Konsole (Ganzzahl oder Text, optional neue Tabelle). Läuft **immer** über die Freigabe-Seite |
 
 </details>
 
 <details>
-<summary><b>Software &amp; Sicherheit</b> · 12 Tools · CVEs, fehlende Updates, Defender, BitLocker, Lizenzen</summary>
+<summary><b>Software &amp; Sicherheit</b> · 15 Tools · CVEs, fehlende Updates, Updates ablehnen, Defender, BitLocker, Lizenzen</summary>
 
 | | Tool | Zweck |
 |---|---|---|
 | 🟢 | `acmp_get_software`, `acmp_software_inventory` *(DB)*, `acmp_software_search` *(DB)* | installierte Software je Rechner und Suche („Wo ist 7-Zip drauf?“) |
 | 🟢 | `acmp_outdated_software` *(DB)* | veraltete Software |
 | 🟢 | `acmp_missing_updates`, `acmp_failed_updates` *(beide DB)* | fehlende und fehlgeschlagene Windows-Updates |
+| 🟢 | `acmp_wum_declined` *(DB)* | abgelehnte Windows-Updates mit Kommentar und betroffenen Clients, mit `scope: "open"` die offenen Kandidaten |
+| 🟡 | `acmp_wum_decline`, `acmp_wum_restore` *(WW)* | Windows-Updates ablehnen wie in der Konsole bzw. die Ablehnung aufheben, höchstens 10 je Auftrag, mit Pflicht-Kommentar. Läuft **immer** über die Freigabe-Seite |
 | 🟢 | `acmp_vulnerabilities`, `acmp_oval_scan_status` *(beide DB)* | Schwachstellen (CVEs) mit Score und Zeitpunkt des letzten Scans |
 | 🟢 | `acmp_defender_health` *(DB)* | Defender-Status („Wo ist der Echtzeitschutz aus?“) |
 | 🟢 | `acmp_bitlocker_status` *(DB)* | BitLocker-Status je Laufwerk |
@@ -251,7 +255,7 @@ Die Stufen sind die Standardwerte aus dem Code und lassen sich pro Tool unter `/
 </details>
 
 <details>
-<summary><b>Client Commands</b> · 15 Tools · <i>optional</i> · Entwurf anlegen, neue Version, freigeben, einsortieren</summary>
+<summary><b>Client Commands</b> · 17 Tools · <i>optional</i> · Entwurf anlegen, neue Version, Parameter, freigeben, einsortieren</summary>
 
 Die Public API kann Client Commands nur starten, nicht anlegen. Diese Tools lesen sie deshalb direkt aus der ACMP-Datenbank, legen auf Wunsch **Entwürfe** an, geben eigene Entwürfe frei und sortieren Commands in Ordner. Das Schreiben ist von Aagon nicht vorgesehen und deshalb standardmäßig aus. Einrichtung: [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md#client-commands-direkt-schreiben-cc-writer) → „Client Commands direkt schreiben“.
 
@@ -266,6 +270,8 @@ Die Public API kann Client Commands nur starten, nicht anlegen. Diese Tools lese
 | 🟡 | `acmp_cc_add_file`, `acmp_cc_remove_file` *(CW)* | Installationsdatei an einen Entwurf hängen oder entfernen (File Repository, mit SHA-256) |
 | 🟡 | `acmp_cc_new_version` *(CW)* | neue Version eines vorhandenen Commands als Entwurf, auch von freigegebenen und fremden (wie „Speichern“ in der Konsole). Die freigegebene Version läuft weiter, bis die neue freigegeben ist (`acmp_cc_release` oder Konsole). Läuft **immer** über die Freigabe-Seite, die Vorschau zeigt die Änderungen gegenüber der freigegebenen Version |
 | 🟡 | `acmp_cc_release` *(CW)* | Entwürfe freigeben wie in der Konsole, mehrere in einem Auftrag: eigene neue Commands und neue Versionen aus `acmp_cc_new_version` (die bisher freigegebene Version wird dabei abgelöst). Läuft **immer** über die Freigabe-Seite, auch wenn sie sonst abgeschaltet ist |
+| 🟢 | `acmp_cc_parameters` *(DB)* | Parameter eines Commands (Text, Auswahl, Kontrollkästchen), die ACMP beim Job und im Kiosk abfragt |
+| 🟡 | `acmp_cc_set_parameters` *(CW)* | Parameter setzen wie der Dialog in der Konsole, wirkt ohne neue Version. Läuft **immer** über die Freigabe-Seite |
 | 🟡 | `acmp_cc_move` *(CW)* | viele Commands in einem Auftrag in andere Ordner verschieben, mit `undo` |
 | 🟡 | `acmp_cc_add_folder`, `acmp_cc_update_folder` *(CW)* | Ordner anlegen (Rechte wie der Elternordner), umbenennen oder verschieben |
 | 🟡 | `acmp_lib_install` *(DB, CW)* | Vorlage aus der [ACMP CTL](https://herzog-gmbh.github.io/acmp-ctl/) (Community Template Library) oder einem eigenen Vorlagen-Ordner als Entwurf installieren. Mit `dryRun` 🟢 auch ohne Writer |
@@ -293,6 +299,23 @@ Auch den ACMP-Kiosk kann die Public API nicht pflegen. Diese Tools lesen und sch
 | 🟡 | `acmp_kiosk_restore` *(KW)* | eine Kiosk-Änderung aus der automatischen Sicherung zurückholen |
 
 Geschrieben wird nur in Kiosk-Ordnern, die ihr freigebt, und in Ordnern, die der MCP selbst angelegt hat. Vor jeder Änderung sichert der Server den alten Stand. Die Anwender sehen Änderungen nach „Aktualisieren“ im Kiosk.
+
+</details>
+
+<details>
+<summary><b>Unix Scripts</b> · 5 Tools · <i>optional</i> · Bash/Zsh für Linux und macOS, Ausgaben je Client</summary>
+
+Unix Scripts (ACMP 6.10, Desktop Automation) laufen über den ACMP Unix Agent als root auf Linux- und macOS-Clients. Auch sie kann die Public API nicht anlegen. Das Schreiben ist standardmäßig aus. Einrichtung: [`docs/ACMP-VORBEREITUNG.md`](docs/ACMP-VORBEREITUNG.md#weitere-schreib-tools-windows-updates-unix-scripts-individuelle-felder) → „Weitere Schreib-Tools“.
+
+| | Tool | Zweck |
+|---|---|---|
+| 🟢 | `acmp_unix_scripts` *(DB)* | Skripte mit Ordner, Interpreter und freigegebener Version, auf Wunsch alle Versionen mit Verteilungsring und Inhalt |
+| 🟢 | `acmp_unix_results` *(DB)* | Läufe je Client aus dem Job-Monitor mit der vollständigen Ausgabe (StdOut/StdErr) |
+| 🟡 | `acmp_unix_script_create` *(UW)* | neues Skript anlegen, Version 1 in Testring 1 |
+| 🟡 | `acmp_unix_script_new_version` *(UW)* | neue Version anlegen, die Vorschau zeigt die geänderten Zeilen |
+| 🟡 | `acmp_unix_script_set_ring` *(UW)* | Verteilungsring einer Version ändern, `ring: 255` gibt sie frei |
+
+Alle drei Schreib-Tools laufen **immer** über die Freigabe-Seite. Vorhandene Versionen ändert und löscht der MCP nicht. Einen Unix-Job **starten** kann er nicht, weil ACMP dafür weder API noch Job Collection hat: Das macht ihr in der Konsole (Container oder Abfrage → „Unix-Jobs ausführen“), das Ergebnis liest danach `acmp_unix_results`. Ohne freie Unix-Script-Lizenz meldet ACMP den Job als „Erfolg“, das Skript läuft aber nicht. `acmp_unix_results` weist darauf hin.
 
 </details>
 
@@ -381,6 +404,7 @@ Die Anmeldung läuft über ein eigenes Token pro Freigeber und ist **unabhängig
 | `helpdesk.createdStateId` | optional, Ticketstatus für neue Tickets |
 | `ccWriter.*` | optional, standardmäßig aus: Client Commands als Entwurf schreiben, freigeben, einsortieren. Einrichten mit `setup-cc-writer.ps1`, weitere Bediener mit `setup-cc-writer.ps1 -AddRequester <name>` |
 | `kioskWriter.*` | optional, standardmäßig aus: Kiosk pflegen. Setzt den CC-Writer voraus (gleicher SQL-Login). Einrichten mit `setup-kiosk-writer.ps1` |
+| `wumWriter.*`, `unixWriter.*`, `cfWriter.*` | optional, standardmäßig aus: Windows-Updates ablehnen, Unix Scripts schreiben, individuelle Felder anlegen. Setzen den CC-Writer voraus (gleicher SQL-Login und Bediener). Einrichten mit `setup-extra-writers.ps1` |
 | `ctl.sources` | optional, Quellen für `acmp_lib_install`. Standard: Ordner `ctl` im Installationsordner, dann das Repo [`Herzog-GmbH/acmp-ctl`](https://github.com/Herzog-GmbH/acmp-ctl) |
 
 </details>
@@ -397,10 +421,11 @@ Die Anmeldung läuft über ein eigenes Token pro Freigeber und ist **unabhängig
 - Sicherheitslücken bitte **nicht** als öffentliches Issue melden, sondern wie in [`SECURITY.md`](SECURITY.md) beschrieben.
 
 <details>
-<summary><b>CC-Writer und Kiosk-Writer</b></summary>
+<summary><b>Schreib-Tools an der Datenbank</b></summary>
 
 - Der optionale CC-Writer schreibt mit einem **eigenen SQL-Login** mit genau den nötigen Rechten (`grant-cc-writer.sql`), nie mit dem Lese-Zugang. In `SYS_SCRIPTS` darf er nichts löschen. Er legt nur Entwürfe an, sichert vor jeder Änderung und ändert oder gibt nur Commands frei, die er selbst angelegt hat. Fremde Commands ändert er nur als neue Version (`acmp_cc_new_version`, immer mit Freigabe-Anfrage) und verschiebt sie auf Wunsch. Löschen darf er nichts.
 - Der optionale Kiosk-Writer nutzt denselben Login mit den Rechten aus `grant-kiosk-writer.sql`. Ordner löschen darf er nicht, und er schreibt nur in freigegebene Kiosk-Ordner.
+- WUM-, Unix-Script- und Feld-Writer nutzen ebenfalls diesen Login (`grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql`). Updates lehnt der Server nur über die ACMP-eigene Prozedur ab. Unix Scripts und Versionen legt er nur neu an, ändern oder löschen darf er sie nicht. Für individuelle Felder bekommt der Login **keine** DDL-Rechte: Tabellen und Spalten legen zwei Prozeduren an, die nur genau das Muster des ACMP-Servers bauen. Alle Schreib-Tools dieser drei laufen **immer** über die Freigabe-Seite, auch wenn sie sonst abgeschaltet ist.
 - Wichtig für das Onboarding: Der SQL-Login gehört dem **Server**, nicht den Bedienern. Wer die Schreib-Tools beantragen darf, steht in `ccWriter.allowedRequesters` (`add-user.ps1` fragt danach, für Bediener aus `/onboarding`: `setup-cc-writer.ps1 -AddRequester <name>`). Zustimmen muss trotzdem ein Freigeber. Die ACMP-Rechte der Person prüft ACMP bei diesen Tools **nicht**, weil sie an der Public API vorbei in die Datenbank schreiben.
 
 </details>
