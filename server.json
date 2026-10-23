@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/Herzog-GmbH/acmp-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/Herzog-GmbH/acmp-mcp/releases/download/mcpb-v1.0.0/acmp-mcp-1.0.0.mcpb",
-      "fileSha256": "2f6db3ca3edca7932bf695c6cdb5822f1f995a4bedb8f14589d9f1d5e95ff30a",
+      "identifier": "https://github.com/Herzog-GmbH/acmp-mcp/releases/download/mcpb-v1.1.0/acmp-mcp-1.1.0.mcpb",
+      "fileSha256": "1bbad7377f208b8d8d6553303e7406c29221d838e18c801d405165e1eb6aaa48",
       "transport": {
         "type": "stdio"
       }
