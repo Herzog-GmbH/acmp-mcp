@@ -77,7 +77,7 @@ Die **weiteren Schreib-Tools** setzen ebenfalls den CC-Writer voraus: je Funktio
 git pull
 .\install.ps1          # als Administrator; config.local.json bleibt erhalten
 ```
-Beim Update von Version 1 stellt der Assistent die Config um (`approval` → `web`, mit Sicherung). Die bisherigen Freigabe-Tokens sind danach die Web-Logins; offene Freigabe-Anträge werden nicht mehr ausgeführt. Sag dem Menschen das.
+Beim Update von Version 1 stellt der Assistent die Config um (`approval` → `web`, mit Sicherung). Die bisherigen Freigabe-Tokens sind danach die Web-Logins; offene Freigabe-Anträge werden nicht mehr ausgeführt. Weil die Tokens in den Links der Freigabe-Mails standen, empfiehl danach `.\renew-web-tokens.ps1` (als Administrator im Installationsordner). Dessen Ausgabe enthält die neuen Tokens: nicht zeigen lassen, nur fragen, ob am Ende „FERTIG“ steht. Sag dem Menschen das.
 
 ## Fehlersuche
 | Symptom (`server.log`) | Ursache / Abhilfe |

@@ -31,6 +31,7 @@ Gut zu wissen:
 - Der Server übergibt jedes Skript als eine einzige Base64-Zeile, denn die ACMP-Variablenersetzung zerstört Zeilenumbrüche. Ein `param()`-Block am Skriptanfang funktioniert deshalb nicht.
 - Der Job-Status „Erfolg“ beweist **nicht**, dass das Skript lief, denn das Command wertet den Exit-Code nicht aus. Prüft im Zweifel die Wirkung. Das clientseitige Log liegt in `C:\ProgramData\acmp-mcp-client.log`.
 - `acmp_read_registry` meldet das Ergebnis per HTTP an `web.publicUrl` + `/regresult` zurück. Diese Adresse muss **von den Clients aus** erreichbar sein (siehe `set-network-admin.ps1`).
+- Auf dem ACMP-/MCP-Server selbst startet der Server keine Jobs, auch nicht über `acmp_enqueue_client_command` oder `acmp_call`: Ein Skript als SYSTEM könnte dort `config.local.json` lesen. Geprüft wird jede ClientId im Auftrag über den Computernamen in der Datenbank. Weitere Rechner tragt ihr unter `runPowershell.protectedClients` ein (Computernamen). **Ohne DB-Anbindung** geht das nicht: Dann tragt ihr die ClientId des ACMP-Servers unter `runPowershell.protectedClientIds` ein, sonst lehnt der Server Jobs auf Clients ab.
 
 ### DB-Report-Tools (Schwachstellen, Inventar, Lizenzen …)
 Für diese Tools braucht der Server Lesezugriff auf die ACMP-SQL-Datenbank:

@@ -32,7 +32,10 @@
   "runPowershell": {
     "_hinweis": "Optional. Verweist auf eine Client-Command-Vorlage mit einer Skript-Variable, damit acmp_run_powershell verfuegbar wird. Ohne diesen Abschnitt bleibt das Tool aus. clientCommandId aus eurer ACMP-Konsole (Client Commands).",
     "clientCommandId": "HIER_CLIENT_COMMAND_GUID",
-    "variableName": "SCRIPT"
+    "variableName": "SCRIPT",
+    "_hinweis_geschuetzt": "Auf diesen Rechnern startet der MCP keine Jobs (Computernamen bzw. ClientIds). Der ACMP-/MCP-Server selbst ist immer dabei. Ohne DB-Anbindung die ClientId des ACMP-Servers unter protectedClientIds eintragen, sonst werden Jobs auf Clients abgelehnt.",
+    "protectedClients": [],
+    "protectedClientIds": []
   },
 
   "ccWriter": {

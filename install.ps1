@@ -82,7 +82,7 @@ icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:
 Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
-  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","grant-jobs-writer.sql","grant-jobs-writer2.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1") {
+  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","grant-jobs-writer.sql","grant-jobs-writer2.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1","renew-web-tokens.ps1") {
     Copy-Item (Join-Path $repo $f) $InstallDir -Force
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null

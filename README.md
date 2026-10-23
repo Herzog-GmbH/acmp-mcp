@@ -102,6 +102,7 @@ cd C:\ProgramData\AcmpMcp
 | `.\install.ps1` | erneut ausführen = aktualisieren. Konfiguration und Bediener bleiben erhalten, Erledigtes wird übersprungen. Eine Config von Version 1 wird dabei umgestellt (`approval` → `web`) |
 | `.\install.ps1 -NonInteractive -SicsUser … -AdminName …` | ohne Rückfragen, z. B. für Skripte. Das Passwort kommt aus `$env:ACMP_SICS_PASSWORD` |
 | `.\set-network-admin.ps1 -BindAddress <IP>` | Netzwerk später ändern |
+| `.\renew-web-tokens.ps1` | Web-Tokens erneuern (alle oder `-Name …`). Die alten gelten danach nicht mehr, die neuen zeigt das Skript nur einmal im Fenster |
 | `.\uninstall-admin.ps1` | Dienst und Firewall-Regel entfernen |
 
 </details>
@@ -170,7 +171,7 @@ Bis Version 1 landeten Schreib-, Ausführ- und Löschbefehle als Antrag auf eine
 3. Nach eurem OK startet sie es (`acmp_run_powershell`). Der Aufruf steht sofort im Aktivitätsprotokoll.
 4. Die KI meldet das Ergebnis.
 
-**Update von Version 1:** `git pull` und `.\install.ps1`. Der Assistent stellt die Config um (`approval` → `web`, mit Sicherung). Eure bisherigen Freigabe-Tokens sind danach die Web-Logins. Auch ohne erneute Installation liest der Server eine alte `approval`-Section weiter (nur `publicUrl`, `requester` und `approvers`). Offene Freigabe-Anträge werden nicht mehr ausgeführt.
+**Update von Version 1:** `git pull` und `.\install.ps1`. Der Assistent stellt die Config um (`approval` → `web`, mit Sicherung). Eure bisherigen Freigabe-Tokens sind danach die Web-Logins. Sie standen aber in den Links der Freigabe-Mails: Erneuert sie danach mit `.\renew-web-tokens.ps1` (als Administrator im Installationsordner). Auch ohne erneute Installation liest der Server eine alte `approval`-Section weiter (nur `publicUrl`, `requester` und `approvers`). Offene Freigabe-Anträge werden nicht mehr ausgeführt.
 
 > [!IMPORTANT]
 > Ohne Freigabe hängt die Sicherheit an euren Bedienern und daran, wem ihr API-Keys gebt. Behandelt jeden Key wie ein Domänen-Admin-Passwort, lasst die KI keine Anweisungen aus Tickets, Dateien oder Webseiten ausführen und zieht im Zweifel die Notbremse.
@@ -384,7 +385,7 @@ Beispiel-Prompts stehen in [`docs/USAGE.md`](docs/USAGE.md). Neue native Kommand
 | `/changelog` | Patchverlauf des Servers |
 | `/setup` | Ersteinrichtung, nur aktiv, solange es keinen Bediener mit Web-Zugang gibt |
 
-Die Anmeldung (`/login`) läuft über Kurzname und ein eigenes Web-Token pro Bediener, danach über ein Sitzungs-Cookie (HttpOnly, SameSite=Strict, 12 Stunden). Das Web-Token ist **unabhängig** vom ACMP- oder MCP-Key: Mit einem abgeflossenen API-Key lässt sich die Notbremse nicht lösen. Alte Links aus Version 1 (`?approver=…&token=…`) melden an und leiten weiter.
+Die Anmeldung (`/login`) läuft über Kurzname und ein eigenes Web-Token pro Bediener, danach über ein Sitzungs-Cookie (HttpOnly, SameSite=Strict, 12 Stunden). Das Web-Token ist **unabhängig** vom ACMP- oder MCP-Key: Mit einem abgeflossenen API-Key lässt sich die Notbremse nicht lösen. Alte Links aus Version 1 (`?approver=…&token=…`) melden nicht mehr an, denn ein Token in der Adresse landet in Mails, Browserverlauf und Proxy-Logs. `renew-web-tokens.ps1` erneuert die Web-Tokens.
 
 ## Konfiguration
 
@@ -400,6 +401,7 @@ Die Anmeldung (`/login`) läuft über Kurzname und ein eigenes Web-Token pro Bed
 | `mcp.bindAddress` / `httpPort` | Standard `127.0.0.1` / `8765`. LAN-Zugriff über `set-network-admin.ps1` |
 | `web.publicUrl` / `web.users` | Adresse der Weboberfläche (auch für den Rückkanal von `acmp_read_registry`) und Bediener mit Web-Zugang |
 | `runPowershell.clientCommandId` | optional, aktiviert `acmp_run_powershell` / `acmp_read_registry` |
+| `runPowershell.protectedClients` / `protectedClientIds` | optional: weitere Rechner (Computernamen bzw. ClientIds), auf denen der MCP keine Jobs startet. Der ACMP-/MCP-Server selbst ist immer dabei. Ohne DB-Anbindung setzt ihr `protectedClientIds` (ClientId des ACMP-Servers), sonst lehnt der Server Jobs auf Clients ab |
 | `db.connectionString` | optional, aktiviert die DB-Report-Tools |
 | `helpdesk.createdStateId` | optional, Ticketstatus für neue Tickets |
 | `ccWriter.*` | optional, standardmäßig aus: Client Commands als Entwurf schreiben, freigeben, einsortieren. Einrichten mit `setup-cc-writer.ps1`, weitere Bediener mit `setup-cc-writer.ps1 -AddRequester <name>` |
@@ -416,7 +418,7 @@ Die Anmeldung (`/login`) läuft über Kurzname und ein eigenes Web-Token pro Bed
 
 - **Kein TLS eingebaut.** Der Server lauscht standardmäßig nur auf `127.0.0.1` und verweigert LAN-Betrieb ohne API-Key. Im LAN beschränkt ihr per Firewall die Quell-Subnetze. Über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor.
 - `install.ps1` beschränkt den Installationsordner auf Administratoren und SYSTEM, denn dort liegen Zugangsdaten.
-- **Notbremse und Protokoll** liegen im Installationsordner (`notbremse.json`, `activity-*.jsonl`). Wer dort schreiben kann, kann beides umgehen, deshalb nur Administratoren und SYSTEM. Lasst `acmp_run_powershell` nicht auf den ACMP-Server selbst los.
+- **Notbremse und Protokoll** liegen im Installationsordner (`notbremse.json`, `activity-*.jsonl`). Wer dort schreiben kann, kann beides umgehen, deshalb nur Administratoren und SYSTEM. Auf dem ACMP-/MCP-Server selbst startet der MCP keine Jobs (`acmp_run_powershell`, `acmp_enqueue_client_command`, `acmp_read_registry`, `acmp_call`), denn ein Skript als SYSTEM könnte dort `config.local.json` mit allen Keys lesen. Weitere Rechner, etwa den SQL-Server, schützt ihr mit `runPowershell.protectedClients`.
 - Bediener-Passwörter werden nie gespeichert: `acmp-token-setup.exe` speichert nur einen DPAPI-verschlüsselten Token (`LocalMachine`).
 - `/regresult` (Rückkanal für `acmp_read_registry`) ist bewusst ohne Key erreichbar, weil der Client den Key nicht kennt. Er nimmt nur Ergebnisse zu offenen, nicht ratbaren Tokens an.
 - Sicherheitslücken bitte **nicht** als öffentliches Issue melden, sondern wie in [`SECURITY.md`](SECURITY.md) beschrieben.

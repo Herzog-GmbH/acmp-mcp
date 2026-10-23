@@ -1,7 +1,7 @@
 // AcmpWeb: Weboberflaeche des ACMP-MCP-Servers (gleicher Port wie der MCP, eigener Login, NICHT der MCP-Bearer-Key).
 // Seiten: Uebersicht (/dashboard), Aktivitaet (/activity), Einstellungen mit Notbremse (/settings), Onboarding (/onboarding),
 // Patchverlauf (/changelog), Ersteinrichtung (/setup). Seit 22.10.2026 ohne Vier-Augen-Freigabe: Schreibaktionen wirken sofort,
-// stehen im Aktivitaetsprotokoll (AcmpActivity) und lassen sich mit der Notbremse sperren. Alte Freigabe-Links leiten um.
+// stehen im Aktivitaetsprotokoll (AcmpActivity) und lassen sich mit der Notbremse sperren. Alte Freigabe-Links melden nicht mehr an.
 // Anmeldung: Kurzname + Web-Token (web.users; Configs von vor dem 22.10.2026: approval.approvers) -> Sitzungs-Cookie
 // (HttpOnly, SameSite=Strict, 12 Stunden, nur im Speicher - nach einem Neustart neu anmelden). Formulare mit Wirkung
 // (Notbremse, Onboarding, Ersteinrichtung) nur per POST, mit dem Pruefwert der Sitzung (csrf).
@@ -128,12 +128,13 @@ class AcmpWeb
             res.Body = LoginPage(null, Get(q, "next")); return;
         }
 
-        // Alte Links mit ?approver=&token= (Lesezeichen, Freigabe-Mails): anmelden und ohne die Zugangsdaten weiterleiten
+        // Alte Links mit ?approver=&token= (Lesezeichen, Freigabe-Mails) melden seit 23.10.2026 nicht mehr an: Ein Token in der Adresse landet in
+        // Mails, Browserverlauf und Proxy-Logs. Der Token wird nicht geprueft, es kommt nur die Anmeldeseite.
         string la = Get(q, "approver"), lt = Get(q, "token");
         if (method == "GET" && !string.IsNullOrEmpty(la) && !string.IsNullOrEmpty(lt))
         {
-            if (Valid(la, lt)) { StartSession(res, la); _log("Webseite: Anmeldung " + la + " (Link)"); Redirect(res, NewPath(path)); }
-            else { Slow(); res.Code = 403; res.Body = LoginPage("Der Link ist ungültig. Bitte mit Kurzname und Web-Token anmelden.", null); _log("Webseite: Anmeldung per Link abgelehnt fuer '" + la + "'"); }
+            res.Code = 403; res.Body = LoginPage("Links mit Token gelten nicht mehr. Bitte mit Kurzname und Web-Token anmelden.", NewPath(path));
+            _log("Webseite: alter Link mit Token abgewiesen (" + path + ")");
             return;
         }
 

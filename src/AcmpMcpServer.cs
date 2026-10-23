@@ -87,6 +87,11 @@ static class AcmpMcp
     static string PsCommandId;              // ClientCommandId der Vorlagen-Aktion fuer acmp_run_powershell (aus Config)
     static string PsVariableName = "SCRIPT"; // Name der Skript-Variable in dieser Vorlage
     static string PublicUrl;                // erreichbare Basis-URL fuer Client-Callbacks und Webseite (web.publicUrl)
+    // Geschuetzte Clients: Jobs (EnqueueClientCommand) nimmt der MCP fuer sie nicht an - ueber kein Tool, auch nicht acmp_call/rawIcql.
+    // Immer dabei: dieser Rechner (der MCP-Server) und der SICS-Host. Ein Skript als SYSTEM koennte dort config.local.json mit allen
+    // Keys und Kennwoertern lesen. Weitere per runPowershell.protectedClients (Computernamen) und runPowershell.protectedClientIds (GUIDs).
+    static readonly HashSet<string> ProtectedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> ProtectedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     // Offene Registry-Leseauftraege (acmp_read_registry): Token -> Auftrag. Der Client meldet das Ergebnis per HTTP an /regresult zurueck.
     static readonly Dictionary<string, RegRead> RegReads = new Dictionary<string, RegRead>(StringComparer.OrdinalIgnoreCase);
     class RegRead
@@ -162,6 +167,24 @@ static class AcmpMcp
             PsCommandId = psCfg["clientCommandId"] != null ? (string)psCfg["clientCommandId"] : null;
             if (PsCommandId != null && (PsCommandId.Length == 0 || PsCommandId.StartsWith("HIER_"))) PsCommandId = null;
             if (psCfg["variableName"] != null && ((string)psCfg["variableName"]).Length > 0) PsVariableName = (string)psCfg["variableName"];
+        }
+        ProtectedNames.Add(Environment.MachineName);
+        IPAddress protHostIp;
+        if (!IPAddress.TryParse(host, out protHostIp) && !host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) ProtectedNames.Add(host.Split('.')[0]);
+        if (psCfg != null)
+        {
+            JArray protNames = psCfg["protectedClients"] as JArray;
+            if (protNames != null) foreach (JToken pt in protNames)
+            {
+                string pn = pt.Type == JTokenType.String ? ((string)pt).Trim() : null;
+                if (!string.IsNullOrEmpty(pn) && !pn.StartsWith("HIER_")) ProtectedNames.Add(pn.Split('.')[0]);
+            }
+            JArray protIds = psCfg["protectedClientIds"] as JArray;
+            if (protIds != null) foreach (JToken pt in protIds)
+            {
+                Guid pg;
+                if (pt.Type == JTokenType.String && Guid.TryParse(((string)pt).Trim().Trim('{', '}'), out pg)) ProtectedIds.Add(pg.ToString().ToUpperInvariant());
+            }
         }
 
         Log("Verbinde mit ACMP SICS (" + host + ") als '" + user + "' ...");
@@ -311,6 +334,9 @@ static class AcmpMcp
             catch (Exception ex) { Log("CC-Parameter setzen: Vorpruefung fehlgeschlagen: " + ex.Message); }
         }
         Log("acmp_run_powershell: " + (PsCommandId != null ? "aktiv (Vorlage " + PsCommandId + ", Variable " + PsVariableName + ")" : "aus (runPowershell.clientCommandId nicht gesetzt)"));
+        Log("Geschuetzte Clients (keine Jobs per MCP): " + string.Join(", ", new List<string>(ProtectedNames).ToArray()) +
+            (ProtectedIds.Count > 0 ? " + " + ProtectedIds.Count + " ClientId(s)" : "") +
+            (DB.Enabled || ProtectedIds.Count > 0 ? "" : " - ohne DB-Anbindung nicht pruefbar: Jobs auf Clients werden abgelehnt, bis runPowershell.protectedClientIds gesetzt ist"));
         DbToolDefs = new JArray();
         if (DB.Enabled)
         {
@@ -663,7 +689,7 @@ static class AcmpMcp
         enqProps["ignoreMaintenance"] = Prop("boolean", "Wartungsfenster ignorieren und sofort ausfuehren (Standard false). true verhindert 'Warte auf Wartung'.");
         enqProps["intent"] = Prop("string", "Kurze Klartext-Beschreibung was/warum ausgefuehrt werden soll (steht im Aktivitaetsprotokoll).");
         tools.Add(Tool("acmp_enqueue_client_command",
-            "(FUEHRT AUS, wirkt sofort) Stellt einen Client Command (Job) zur Ausfuehrung auf einem Client in die Warteschlange (EnqueueClientCommand v2). Der Job laeuft, sobald der Agent ihn abholt. Nur freigegebene Commands; Ziel und Command vorher mit dem Menschen abstimmen.",
+            "(FUEHRT AUS, wirkt sofort) Stellt einen Client Command (Job) zur Ausfuehrung auf einem Client in die Warteschlange (EnqueueClientCommand v2). Der Job laeuft, sobald der Agent ihn abholt. Nur freigegebene Commands; Ziel und Command vorher mit dem Menschen abstimmen. Nicht auf geschuetzten Clients (der ACMP-/MCP-Server selbst und runPowershell.protectedClients).",
             enqProps, new[] { "clientCommandId", "clientId" }));
 
         // Komfort: ad-hoc PowerShell auf einem Client (nur wenn eine Vorlagen-Aktion konfiguriert ist)
@@ -675,7 +701,7 @@ static class AcmpMcp
             psProps["ignoreMaintenance"] = Prop("boolean", "Wartungsfenster ignorieren und sofort ausfuehren (Standard true).");
             psProps["intent"] = Prop("string", "Kurze Klartext-Beschreibung was das Skript tun soll (steht im Aktivitaetsprotokoll).");
             tools.Add(Tool("acmp_run_powershell",
-                "(FUEHRT AUS, wirkt sofort) PowerShell auf einem Client als SYSTEM - reale Codeausfuehrung auf dem Zielrechner, sobald der Agent den Job abholt. Skript und Zielrechner vorher dem Menschen zeigen und sein OK abwarten.",
+                "(FUEHRT AUS, wirkt sofort) PowerShell auf einem Client als SYSTEM - reale Codeausfuehrung auf dem Zielrechner, sobald der Agent den Job abholt. Skript und Zielrechner vorher dem Menschen zeigen und sein OK abwarten. Nicht auf geschuetzten Clients (der ACMP-/MCP-Server selbst und runPowershell.protectedClients).",
                 psProps, new[] { "script", "client" }));
 
             // Komfort: Registry-Wert eines Clients auslesen und das Ergebnis im Chat anzeigen (festes, nur-lesendes PowerShell + HTTP-Rueckkanal).
@@ -1827,7 +1853,7 @@ static class AcmpMcp
         if (name == "acmp_call")
         {
             string raw = (string)a["rawIcql"];
-            if (!string.IsNullOrEmpty(raw)) return Respond(CONN.Publish(raw), a);
+            if (!string.IsNullOrEmpty(raw)) { GuardProtectedTargets(raw); return Respond(CONN.Publish(raw), a); }
             string cmd = (string)a["command"]; if (string.IsNullOrEmpty(cmd)) throw new Exception("command fehlt");
             int ver = a["version"] != null ? (int)a["version"] : 1;
             string inner = a["inner"] != null ? (string)a["inner"] : "";
@@ -2342,6 +2368,7 @@ static class AcmpMcp
             }
 
             string clientRef = ClientRef(client); // wirft frueh bei unbekanntem Client
+            GuardProtectedTargets(clientRef);
             string token = Guid.NewGuid().ToString("N");
             var rr = new RegRead { Client = client, Path = path, Value = valName, Created = DateTime.UtcNow };
             lock (RegReads) { RegReads[token] = rr; }
@@ -2777,9 +2804,37 @@ static class AcmpMcp
         catch (Exception ex) { throw new Exception("inner ist kein vollstaendiges XML-Fragment (" + ex.Message + ") - nichts ausgefuehrt."); }
     }
 
+    // Jobs auf geschuetzte Clients ablehnen (siehe ProtectedNames). Geprueft wird jede GUID im Auftrag (XML-Entities aufgeloest): steht sie in
+    // protectedClientIds oder gehoert sie laut DB zu einem Client mit geschuetztem Computernamen, wird nichts ausgefuehrt. Ohne DB und ohne
+    // protectedClientIds ist das nicht pruefbar - dann lieber ablehnen.
+    static readonly System.Text.RegularExpressions.Regex GuidAnyRx = new System.Text.RegularExpressions.Regex("[0-9A-Fa-f]{8}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{12}");
+    static void GuardProtectedTargets(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        System.Text.RegularExpressions.MatchCollection ms = GuidAnyRx.Matches(WebUtility.HtmlDecode(text));
+        if (ms.Count == 0) return;
+        bool db = DB != null && DB.Enabled;
+        if (!db && ProtectedIds.Count == 0)
+            throw new Exception("Ohne DB-Anbindung ist nicht pruefbar, ob das Ziel der ACMP-/MCP-Server ist: runPowershell.protectedClientIds in der Config setzen (ClientId dieses Servers) - nichts ausgefuehrt.");
+        foreach (System.Text.RegularExpressions.Match m in ms)
+        {
+            Guid g; if (!Guid.TryParse(m.Value, out g)) continue;
+            string id = g.ToString().ToUpperInvariant(), cn = null;
+            if (!ProtectedIds.Contains(id))
+            {
+                if (!db) continue;
+                try { cn = DB.ClientName(id); }
+                catch (Exception ex) { throw new Exception("Ziel nicht pruefbar (DB: " + ex.Message + ") - nichts ausgefuehrt."); }
+                if (cn == null || !ProtectedNames.Contains(cn.Trim().Split('.')[0])) continue;
+            }
+            throw new Exception("Ziel " + (cn != null ? cn : id) + " ist geschuetzt (der ACMP-/MCP-Server selbst bzw. runPowershell.protectedClients): dort startet der MCP keine Jobs - ein Skript als SYSTEM koennte die Zugangsdaten des MCP lesen. Nichts ausgefuehrt; auf diesem Rechner bitte direkt in der ACMP-Console arbeiten.");
+        }
+    }
+
     // Schreibendes bzw. ausfuehrendes ACMP-Kommando: laeuft sofort (Notbremse und Aktivitaetsprotokoll in CallTool).
     static JObject RunCall(string command, int version, string inner, JObject a)
     {
+        if (command != null && command.IndexOf("Enqueue", StringComparison.OrdinalIgnoreCase) >= 0) GuardProtectedTargets(inner);
         return Respond(CONN.Call(command, version, inner), a);
     }
 
