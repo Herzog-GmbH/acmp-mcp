@@ -5,8 +5,9 @@
 //    Huelle eaEdit. Keine weiteren Tabellen, kein Signal an die Agents - die holen ihre Job-Liste ueber af_Jobs_CalcJobsOfTemplates aus SYS_Jobs.
 //  - ap_Job_IsJobActive haelt einen Container-Job fuer aktiv, solange IRGENDEIN <Enabled> "true" ist (auch im inneren Zeitfenster), deshalb
 //    setzt das Abschalten ALLE Enabled auf false.
-//  - ConditionCheckSum (32 Hex, wird an die Agents durchgereicht) ist kein einfacher Hash ueber die XML (an 3 Mitschnitt-Paaren und 45 DB-Zeilen
-//    geprueft). Der MCP setzt einen neuen Wert (MD5 ueber die neue XML, UTF-16LE), damit Agents die Aenderung erkennen; acmp_job_restore stellt
+//  - ConditionCheckSum (32 Hex, wird an die Agents durchgereicht) ist kein einfacher Hash ueber die XML (an 7 Mitschnitt-Paaren und 44 DB-Zeilen
+//    geprueft). Ist der Wert der Console fuer genau diese Startbedingung bekannt (zweiter Mitschnitt bzw. eindeutig in der DB, siehe KnownChecksum),
+//    nimmt der MCP ihn, sonst einen eigenen (MD5 ueber die neue XML, UTF-16LE), damit Agents die Aenderung erkennen; acmp_job_restore stellt
 //    alte XML und alte Pruefsumme wieder her.
 //  - Loeschen: die Console loescht beim letzten Job des Containers die ganze Job-Vorlage (DELETE SYS_Templates, Kaskade). Der MCP loescht nur
 //    die Zeile in SYS_Templates_Jobs; der Trigger TG_Delete_SYS_Templates_Jobs loescht dann SYS_Jobs und setzt SYS_Jobs_Logs.State = 2 (fertig).
@@ -236,6 +237,59 @@ partial class AcmpJobs
             byte[] h = md5.ComputeHash(Encoding.Unicode.GetBytes(xml ?? ""));
             var sb = new StringBuilder(); foreach (byte b in h) sb.Append(b.ToString("X2")); return sb.ToString();
         }
+    }
+
+    // ---------- Pruefsumme wie die Console (wo bekannt) ----------
+    // Die Formel von ConditionCheckSum ist unbekannt. Belegt (Mitschnitte und DB, 22.10.2026): die Bedingungs-Id geht NICHT ein (ein vorhandener Job und
+    // die Test-Bedingung aus dem zweiten Mitschnitt haben verschiedene Ids und denselben Wert, 10 Jobs teilen ihn), Action schon (erster Mitschnitt: Anlegen und
+    // Einschalten unterscheiden sich nur in Action und haben verschiedene Werte). Einige DB-Zeilen mit eaNone tragen Werte, die nicht zu ihrem
+    // XML passen (offenbar spaeter umgeschrieben). Deshalb nur bei exakt gleichem XML ohne Id-Werte: zuerst die Werte frischer Console-Speicherungen
+    // aus dem zweiten Mitschnitt, sonst der Wert aus der DB, wenn alle Zeilen gleichen Inhalts ihn teilen und keine davon der MCP selbst berechnet hat.
+    static readonly object[][] ConsoleChecksums = {
+        new object[] { "once", 1, false, "5D70DD46B91267627BD4BABAD99D42E0" },
+        new object[] { "startup", 1, false, "7FCCFC6179A826D9F4A36C78E8BA77A2" },
+        new object[] { "daily", 1, true, "AD89B9D5787979C2152C47B78239CD80" },
+        new object[] { "maintenance", 1, false, "B52254AE494C5785CD7F90DA62059A0F" } };
+    public const string OwnChecksumSource = "eigene (MD5, Formel der Console unbekannt)";
+    static readonly Regex HexRx = new Regex("^[0-9A-F]{32}$");
+
+    // Startbedingung ohne Id-Werte, einheitlich serialisiert (Vergleichsschluessel); null = nicht lesbar
+    public static string ConditionKey(string xml)
+    {
+        if (string.IsNullOrEmpty(xml)) return null;
+        try
+        {
+            var d = new XmlDocument(); d.LoadXml(xml);
+            foreach (XmlNode n in d.GetElementsByTagName("Id")) n.InnerText = "";
+            return d.OuterXml.Replace(" />", "/>");
+        }
+        catch { return null; }
+    }
+
+    // Bekannte Pruefsumme der Console fuer genau diese Startbedingung, sonst null. rows: je Job { Name, Conditions, ConditionCheckSum };
+    // own: Pruefsummen, die der MCP selbst berechnet hat (zaehlen nicht)
+    public static string KnownChecksum(string xml, IEnumerable<string[]> rows, ICollection<string> own, out string source)
+    {
+        source = null;
+        string key = ConditionKey(xml);
+        if (key == null) return null;
+        foreach (object[] k in ConsoleChecksums)
+            if (ConditionKey(ConditionXml(null, (string)k[0], (int)k[1], (bool)k[2], "{00000000-0000-0000-0000-000000000000}")) == key)
+            { source = "wie die Console (Mitschnitt 22.10.2026)"; return (string)k[3]; }
+        if (rows == null) return null;
+        string val = null, example = null; int n = 0;
+        foreach (string[] r in rows)
+        {
+            if (r == null || r.Length < 3 || r[2] == null || !HexRx.IsMatch(r[2])) continue;
+            if (own != null && own.Contains(r[2])) continue;
+            if (ConditionKey(r[1]) != key) continue;
+            if (val == null) { val = r[2]; example = r[0]; }
+            else if (val != r[2]) { source = null; return null; }   // gleicher Inhalt, verschiedene Werte: nicht eindeutig
+            n++;
+        }
+        if (val == null) return null;
+        source = "wie " + n + " Job(s) mit gleicher Startbedingung in der DB (z.B. \"" + example + "\")";
+        return val;
     }
 
     static readonly Regex BackupRx = new Regex(@"^\d{8}-\d{6}-\d{3}_(disable|enable|delete|condition|restriction)_[0-9A-F]{8}\.json$");
@@ -594,6 +648,46 @@ partial class AcmpJobs
         return IsNullTok(j["containerId"]) ? "kein Container" : (IsNullTok(j["path"]) ? j["containerId"] + " (Container fehlt)" : (string)j["path"] + " (" + j["members"] + " Mitglieder)");
     }
 
+    // Alle Jobs mit 32-Hex-Pruefsumme (fuer KnownChecksum), ohne JobAction
+    List<string[]> LoadChecksumRows(SqlConnection c)
+    {
+        var l = new List<string[]>();
+        var q = Cmd(c, "SELECT Name, CAST(Conditions AS nvarchar(max)), ConditionCheckSum FROM SYS_Jobs WHERE LEN(ISNULL(ConditionCheckSum, '')) = 32");
+        using (var r = q.ExecuteReader()) while (r.Read()) l.Add(new[] { Str(r, 0) ?? "", Str(r, 1), Str(r, 2) });
+        return l;
+    }
+
+    // Pruefsummen, die der MCP selbst berechnet hat (aus den Sicherungen: after.checksumQuelle "eigene ..." oder ohne Angabe)
+    HashSet<string> OwnChecksums()
+    {
+        var s = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(_backupDir) || !Directory.Exists(_backupDir)) return s;
+        foreach (string f in Directory.GetFiles(_backupDir, "*.json"))
+        {
+            try
+            {
+                JObject b = JObject.Parse(File.ReadAllText(f));
+                JObject after = b["after"] as JObject;
+                if (after == null || !IsStr(after["checksum"])) continue;
+                string src = IsStr(after["checksumQuelle"]) ? (string)after["checksumQuelle"] : null;
+                if (src == null || src.StartsWith("eigene")) s.Add((string)after["checksum"]);
+            }
+            catch { }
+        }
+        return s;
+    }
+
+    static string Cs8(string cs) { return string.IsNullOrEmpty(cs) ? "(leer)" : cs.Length > 8 ? cs.Substring(0, 8) + "..." : cs; }
+
+    // Pruefsumme fuer eine vom MCP gebaute Startbedingung: bekannter Console-Wert, sonst eigener
+    static string ChecksumFor(string xml, List<string[]> rows, HashSet<string> own, out string source)
+    {
+        string cs = KnownChecksum(xml, rows, own, out source);
+        if (cs != null) return cs;
+        source = OwnChecksumSource;
+        return NewChecksum(xml);
+    }
+
     // Letzte Sicherung des MCP, die genau den jetzigen Stand erzeugt hat (fuer "einschalten = zuruecknehmen")
     JObject FindOwnBackup(string jobId, string kind, string currentChecksum)
     {
@@ -715,6 +809,7 @@ partial class AcmpJobs
             using (var r = jq.ExecuteReader()) while (r.Read()) ids.Add(Gid(r, 0));
             if (ids.Count == 0) throw new Exception("Container " + cont["path"] + " hat keine Dauerauftraege - nichts zu setzen.");
             if (ids.Count > MaxContainerJobs) throw new Exception("Container " + cont["path"] + " hat " + ids.Count + " Dauerauftraege (hoechstens " + MaxContainerJobs + ") - bitte in der Console.");
+            List<string[]> csRows = LoadChecksumRows(c); HashSet<string> own = OwnChecksums();
             int no = 0;
             foreach (string id in ids)
             {
@@ -729,10 +824,12 @@ partial class AcmpJobs
                 var it = new JObject();
                 it["jobId"] = j["id"]; it["name"] = j["name"]; it["kind"] = j["kind"]; it["target"] = TargetText(j);
                 it["oldXml"] = j["conditions"]; it["oldChecksum"] = j["checksum"]; it["oldLogText"] = j["logText"];
-                it["newXml"] = newXml; it["newChecksum"] = NewChecksum(newXml); it["logText"] = text;
+                string csSrc, newCs = ChecksumFor(newXml, csRows, own, out csSrc);
+                it["newXml"] = newXml; it["newChecksum"] = newCs; it["checksumQuelle"] = csSrc; it["logText"] = text;
                 items.Add(it);
                 lines.Add(++no + ". " + JobLabel(j));
                 lines.Add("   vorher: " + (before.Readable ? before.Text : "(nicht lesbar)") + (before.Console.Length > 0 ? " [Console: " + before.Console + "]" : "") + (before.Readable && !before.Active ? " - wird damit wieder aktiv" : ""));
+                lines.Add("   Pruefsumme " + Cs8(newCs) + " " + csSrc);
                 lines.Add("   " + j["runs7"] + " Laeufe in den letzten 7 Tagen" + ((int)j["waiting"] > 0 ? ", " + j["waiting"] + " Client(s) warten noch" : "") + ".");
             }
         }
@@ -800,6 +897,7 @@ partial class AcmpJobs
         using (var c = new SqlConnection(_readCs))
         {
             c.Open();
+            List<string[]> csRows = LoadChecksumRows(c); HashSet<string> own = OwnChecksums();
             int no = 0;
             foreach (string id in ids)
             {
@@ -813,26 +911,28 @@ partial class AcmpJobs
                 var it = new JObject();
                 it["jobId"] = j["id"]; it["name"] = j["name"]; it["kind"] = j["kind"]; it["target"] = TargetText(j);
                 it["oldXml"] = j["conditions"]; it["oldChecksum"] = j["checksum"]; it["oldLogText"] = j["logText"];
-                string newXml, newCs, how;
-                JObject own = enable ? FindOwnBackup((string)j["id"], "disable", (string)j["checksum"]) : null;
-                if (own != null)
+                string newXml, newCs, how, csSrc;
+                JObject ownBk = enable ? FindOwnBackup((string)j["id"], "disable", (string)j["checksum"]) : null;
+                if (ownBk != null)
                 {
-                    newXml = (string)own["before"]["xml"]; newCs = (string)own["before"]["checksum"]; how = "wie vor dem Abschalten durch den MCP (Sicherung " + own["_file"] + ")";
-                    it["logText"] = own["before"]["logText"];
+                    newXml = (string)ownBk["before"]["xml"]; newCs = (string)ownBk["before"]["checksum"]; how = "wie vor dem Abschalten durch den MCP (Sicherung " + ownBk["_file"] + ")";
+                    csSrc = "alte Pruefsumme aus der Sicherung";
+                    it["logText"] = ownBk["before"]["logText"];
                 }
                 else
                 {
                     newXml = enable ? EnableXml((string)j["conditions"]) : DisableXml((string)j["conditions"]);
-                    newCs = NewChecksum(newXml); how = enable ? "alle Startbedingungen eingeschaltet" : "alle Startbedingungen abgeschaltet";
+                    newCs = ChecksumFor(newXml, csRows, own, out csSrc); how = enable ? "alle Startbedingungen eingeschaltet" : "alle Startbedingungen abgeschaltet";
                     it["logText"] = ParseConditionsConsole(newXml);
                 }
+                it["checksumQuelle"] = csSrc;
                 CondInfo after = ParseConditions(newXml);
                 if (after.Active != enable) throw new Exception(JobLabel(j) + ": neue Startbedingung waere nicht " + (enable ? "aktiv" : "aus") + " - nichts geplant.");
                 it["newXml"] = newXml; it["newChecksum"] = newCs;
                 items.Add(it);
                 lines.Add(++no + ". " + JobLabel(j) + " an " + TargetText(j));
                 lines.Add("   vorher: " + before.Text + (before.Console.Length > 0 ? " [Console: " + before.Console + "]" : ""));
-                lines.Add("   nachher: " + after.Text + " [" + how + "]");
+                lines.Add("   nachher: " + after.Text + " [" + how + "]; Pruefsumme " + Cs8(newCs) + " " + csSrc);
                 if (!enable) lines.Add("   " + j["runs7"] + " Laeufe in den letzten 7 Tagen" + ((int)j["waiting"] > 0 ? ", " + j["waiting"] + " Client(s) warten noch" : "") + ".");
             }
         }
@@ -1040,7 +1140,7 @@ partial class AcmpJobs
                 var b = new JObject();
                 b["kind"] = action; b["tool"] = "acmp_job_set_enabled"; b["von"] = requester; b["zeit"] = DateTime.Now.ToString("s"); b["jobId"] = id; b["name"] = it["name"]; b["target"] = it["target"];
                 var before = new JObject(); before["xml"] = it["oldXml"]; before["checksum"] = it["oldChecksum"]; before["logText"] = it["oldLogText"]; b["before"] = before;
-                var after = new JObject(); after["xml"] = it["newXml"]; after["checksum"] = it["newChecksum"]; after["logText"] = it["logText"]; b["after"] = after;
+                var after = new JObject(); after["xml"] = it["newXml"]; after["checksum"] = it["newChecksum"]; after["checksumQuelle"] = it["checksumQuelle"]; after["logText"] = it["logText"]; b["after"] = after;
                 string bf = SaveBackup(b, action, id);
                 using (SqlTransaction tx = wc.BeginTransaction())
                 {
@@ -1048,7 +1148,7 @@ partial class AcmpJobs
                     tx.Commit();
                 }
                 var o = new JObject(); o["jobId"] = id; o["name"] = it["name"]; o["ziel"] = it["target"];
-                o["startbedingung"] = ParseConditions((string)it["newXml"]).Text; o["sicherung"] = Path.GetFileName(bf);
+                o["startbedingung"] = ParseConditions((string)it["newXml"]).Text; o["pruefsumme"] = Cs8((string)it["newChecksum"]) + " " + it["checksumQuelle"]; o["sicherung"] = Path.GetFileName(bf);
                 done.Add(o); backups.Add(Path.GetFileName(bf));
                 _log("acmp_job_set_enabled (" + action + ") von " + requester + ": " + label + ", Sicherung " + Path.GetFileName(bf));
             }
@@ -1072,7 +1172,7 @@ partial class AcmpJobs
             b["kind"] = "condition"; b["tool"] = "acmp_job_set_condition"; b["von"] = requester; b["zeit"] = DateTime.Now.ToString("s"); b["jobId"] = id; b["name"] = it["name"]; b["target"] = it["target"];
             b["containerId"] = plan["containerId"];
             var before = new JObject(); before["xml"] = it["oldXml"]; before["checksum"] = it["oldChecksum"]; before["logText"] = it["oldLogText"]; b["before"] = before;
-            var after = new JObject(); after["xml"] = it["newXml"]; after["checksum"] = it["newChecksum"]; after["logText"] = it["logText"]; b["after"] = after;
+            var after = new JObject(); after["xml"] = it["newXml"]; after["checksum"] = it["newChecksum"]; after["checksumQuelle"] = it["checksumQuelle"]; after["logText"] = it["logText"]; b["after"] = after;
             files.Add(Path.GetFileName(SaveBackup(b, "condition", id)));
         }
         using (var wc = new SqlConnection(_writeCs))
@@ -1088,7 +1188,7 @@ partial class AcmpJobs
         int i = 0;
         foreach (JObject it in (JArray)plan["items"])
         {
-            var o = new JObject(); o["jobId"] = it["jobId"]; o["name"] = it["name"]; o["sicherung"] = files[i++];
+            var o = new JObject(); o["jobId"] = it["jobId"]; o["name"] = it["name"]; o["pruefsumme"] = Cs8((string)it["newChecksum"]) + " " + it["checksumQuelle"]; o["sicherung"] = files[i++];
             done.Add(o);
         }
         string txt = ParseConditions((string)((JObject)((JArray)plan["items"])[0])["newXml"]).Text;
