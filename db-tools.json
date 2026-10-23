@@ -354,6 +354,96 @@
                  ]
     },
     {
+        "name":  "acmp_agent_tasks",
+        "description":  "Agentenplaner (Agent Tasks): die Vorlagen (SYS_Templates) mit ihren Aufgaben/Scannern (VW_JobsOfTemplate), Startbedingungen als XML, Anlagedatum, zugeordneten Containern samt Container-Prioritaet (Container ausserhalb der Containerstruktur mit roher Id), Zahl der Zuordnungen und Zahl der Clients mit direkter (clientspezifischer) Zuordnung. Eine Zeile je Vorlage und Aufgabe. Damit laesst sich klaeren, WANN ein Scanner (z.B. Schwachstellen-Scanner, Software-, Hardware-, Windows-Update-Scanner) auf welchen Clients laufen soll. LESEHILFE: Ein Client bekommt die Vorlage seines Containers mit der hoechsten Prioritaet; eine clientspezifische Vorlage geht vor; ohne Zuordnung gilt die Standardvorlage \u0027Default - Windows\u0027 bzw. \u0027Default - Unix\u0027. Fehlt eine Aufgabe in der Vorlage oder ist sie in den Startbedingungen nicht aktiviert, laeuft der Scanner nur noch per Client-Aktion. Ob/wann ein Client tatsaechlich geliefert hat: acmp_scanner_status. Clientspezifische Vorlagen nur mit includeClientSpecific=1. Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 1000 THEN @limit ELSE 300 END) t.Name AS Vorlage, CASE WHEN t.IsSystemTemplate = 1 THEN \u0027Standard\u0027 WHEN t.IsClientSpecific = 1 THEN \u0027clientspezifisch\u0027 ELSE \u0027eigene\u0027 END AS Art, t.OsFamily AS OsFamilie, ISNULL(STUFF((SELECT \u0027, \u0027 + ISNULL(s.Path, \u0027{\u0027 + CONVERT(varchar(36), ct.ContainerId) + \u0027} (nicht in Containerstruktur)\u0027) + \u0027 (Prio \u0027 + ISNULL(CAST(s.IntPriority AS varchar(10)), \u0027-\u0027) + \u0027)\u0027 FROM SYS_Containers_Templates ct LEFT JOIN CLT_CONTAINER_STRUCTURE s ON s.ContainerID = ct.ContainerId WHERE ct.TemplateId = t.Id ORDER BY s.IntPriority DESC, s.Path FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027\u0027) AS Container, (SELECT COUNT(*) FROM SYS_Containers_Templates ct2 WHERE ct2.TemplateId = t.Id) AS Zuordnungen, (SELECT COUNT(*) FROM CLT_Clients_Templates cc WHERE cc.TemplateId = t.Id) AS ClientsDirekt, j.NAME AS Aufgabe, j.JobKind AS JobKind, j.Priority AS Reihenfolge, CASE WHEN j.CreationDate \u003e 2 THEN CONVERT(varchar(16), DATEADD(day, -2, CAST(j.CreationDate AS datetime)), 120) END AS Angelegt, CASE WHEN EXISTS (SELECT 1 FROM SYS_ACMP_License_EnabledJobs le WHERE le.Id = j.Id OR le.Id = j.ContentId) THEN 1 ELSE 0 END AS InLizenzliste, LEFT(CAST(j.Conditions AS nvarchar(max)), 3000) AS Startbedingungen, LEFT(CAST(j.JobAction AS nvarchar(max)), 800) AS Aktion, j.Id AS JobId, t.Id AS VorlageId FROM SYS_Templates t LEFT JOIN VW_JobsOfTemplate j ON j.TemplateId = t.Id WHERE (@template IS NULL OR t.Name LIKE \u0027%\u0027 + @template + \u0027%\u0027) AND (@job IS NULL OR j.NAME LIKE \u0027%\u0027 + @job + \u0027%\u0027 OR CAST(j.JobAction AS nvarchar(max)) LIKE \u0027%\u0027 + @job + \u0027%\u0027) AND (ISNULL(@includeClientSpecific, 0) = 1 OR t.IsClientSpecific = 0) ORDER BY t.IsClientSpecific, t.IsSystemTemplate DESC, t.Name, j.Priority, j.NAME",
+        "args":  [
+                     {
+                         "name":  "template",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teil des Vorlagennamens, z.B. \u0027Default\u0027 oder \u0027Server\u0027."
+                     },
+                     {
+                         "name":  "job",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teil des Aufgaben-/Scanner-Namens (sucht auch in der Aktion), z.B. \u0027Schwachst\u0027, \u0027Vulner\u0027, \u0027Software\u0027."
+                     },
+                     {
+                         "name":  "includeClientSpecific",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = auch clientspezifische Vorlagen zeigen. Standard 0."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "default":  "300",
+                         "description":  "Hoechstzahl Zeilen, 1-1000, Standard 300."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_scanner_status",
+        "description":  "Agentenplaner-Stand je Client: wann jeder Scanner (Hardware, Software, Schwachstellen, Windows Updates, ...) zuletzt Daten geliefert (LetzteDaten) bzw. geaenderte Daten geliefert hat (LetzteAenderung), TageAlt, die Wartungsfenster des Clients, und welche Agentenplaner-Vorlagen fuer den Client in Frage kommen (direkt zugeordnet oder ueber Container, mit Container-Prioritaet; Vorlagen an Containern ausserhalb der Containerstruktur werden mit roher Id angehaengt; \u0027keine Zuordnung\u0027 = Standardvorlage). Quelle CLT_SCANNER_DATA_ARRIVAL. Mit client: alle Scanner dieses Clients. Mit scanner (Namensteil): dieser Scanner auf allen Clients - zeigt, welche Clients ihn regelmaessig liefern und welche nicht. minDays filtert auf Clients, deren letzte Lieferung mindestens so alt ist. Sortiert nach Computer und Scanner. Was die Vorlagen vorsehen: acmp_agent_tasks. Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 3000 THEN @limit ELSE 300 END) c.COMPUTERNAME AS Computer, ISNULL(n.NAME, a.SCANNERID) AS Scanner, CASE WHEN a.LastDataArrival \u003e 2 THEN CONVERT(varchar(19), DATEADD(day, -2, CAST(a.LastDataArrival AS datetime)), 120) END AS LetzteDaten, CASE WHEN a.LastDataChange \u003e 2 THEN CONVERT(varchar(19), DATEADD(day, -2, CAST(a.LastDataChange AS datetime)), 120) END AS LetzteAenderung, CASE WHEN a.LastDataArrival \u003e 2 THEN DATEDIFF(day, DATEADD(day, -2, CAST(a.LastDataArrival AS datetime)), GETDATE()) END AS TageAlt, ISNULL(STUFF((SELECT DISTINCT \u0027, \u0027 + v.ProfileName FROM VW_CLT_Jobs_Maintenance_Profiles v WHERE v.ClientId = c.CLIENTID FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027(keins)\u0027) AS Wartungsfenster, ISNULL(STUFF((SELECT \u0027 | \u0027 + x.Txt FROM (SELECT t.Name + \u0027 (direkt)\u0027 AS Txt, 2147483647 AS P FROM CLT_Clients_Templates cc JOIN SYS_Templates t ON t.Id = cc.TemplateId WHERE cc.ClientId = c.CLIENTID UNION ALL SELECT t.Name + \u0027 via \u0027 + s.Name + \u0027 (Prio \u0027 + ISNULL(CAST(s.IntPriority AS varchar(10)), \u0027-\u0027) + \u0027)\u0027, ISNULL(s.IntPriority, 0) FROM CLT_CONTAINER_ITEMS ci JOIN SYS_Containers_Templates ct ON ct.ContainerId = ci.CONTAINERID JOIN SYS_Templates t ON t.Id = ct.TemplateId JOIN CLT_CONTAINER_STRUCTURE s ON s.ContainerID = ci.CONTAINERID WHERE ci.LinkID = c.CLIENTID UNION ALL SELECT ISNULL(t.Name, \u0027(ohne Name)\u0027) + \u0027 via Container {\u0027 + CONVERT(varchar(36), ct.ContainerId) + \u0027} ausserhalb der Containerstruktur\u0027, -1 FROM SYS_Containers_Templates ct JOIN SYS_Templates t ON t.Id = ct.TemplateId WHERE NOT EXISTS (SELECT 1 FROM CLT_CONTAINER_STRUCTURE s2 WHERE s2.ContainerID = ct.ContainerId)) x ORDER BY x.P DESC FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 3, \u0027\u0027), \u0027(keine Zuordnung - Standardvorlage)\u0027) AS Vorlagen, a.SCANNERID AS ScannerId FROM CLT_CLIENTS_TABLE c JOIN CLT_SCANNER_DATA_ARRIVAL a ON a.CLIENTID = c.CLIENTID LEFT JOIN SYS_SCANNER_DATA_ARRIVAL n ON n.SCANNERID = a.SCANNERID WHERE c.IsRetired = 0 AND (@client IS NULL OR c.CLIENTID = @client) AND (@scanner IS NULL OR n.NAME LIKE \u0027%\u0027 + @scanner + \u0027%\u0027 OR a.SCANNERID LIKE \u0027%\u0027 + @scanner + \u0027%\u0027) AND (@minDays IS NULL OR a.LastDataArrival IS NULL OR a.LastDataArrival \u003c= 2 OR DATEDIFF(day, DATEADD(day, -2, CAST(a.LastDataArrival AS datetime)), GETDATE()) \u003e= @minDays) ORDER BY c.COMPUTERNAME, ISNULL(n.NAME, a.SCANNERID)",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername (z.B. PC-0815) oder ClientId-GUID."
+                     },
+                     {
+                         "name":  "scanner",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teil des Scanner-Namens oder der Scanner-Id, z.B. \u0027Schwachst\u0027, \u0027Vulner\u0027, \u0027Software\u0027."
+                     },
+                     {
+                         "name":  "minDays",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Optional: nur Eintraege, deren letzte Lieferung mindestens so viele Tage alt ist (oder fehlt)."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "default":  "300",
+                         "description":  "Hoechstzahl Zeilen, 1-3000, Standard 300."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_maintenance_windows",
+        "description":  "Wartungsfenster (Maintenance Windows) aus SYS_Jobs_Maintenance_Profiles: Name, Beschreibung, zugeordnete Container, Zahl der Clients, fuer die das Fenster gilt (CLT_Jobs_Maintenance_Profiles), und die Zeitfenster-Definition (Wochentage/Uhrzeiten, roh). Wichtig fuer Agentenplaner-Aufgaben und Jobs mit Startbedingung \u0027Within Maintenance Windows\u0027 (Innerhalb von Wartungszeitfenstern): Clients ohne Wartungsfenster - oder mit einem Fenster, in dem sie ausgeschaltet sind - fuehren solche Aufgaben nie aus. Mit client: nur die Fenster dieses Clients. Fenster je Client auch in acmp_scanner_status. Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 500 THEN @limit ELSE 100 END) p.Name AS Wartungsfenster, p.Description AS Beschreibung, ISNULL(STUFF((SELECT \u0027, \u0027 + ISNULL(s.Path, \u0027{\u0027 + CONVERT(varchar(36), pc.ContainerId) + \u0027} (nicht in Containerstruktur)\u0027) FROM SYS_Jobs_Maintenance_Profiles_Containers pc LEFT JOIN CLT_CONTAINER_STRUCTURE s ON s.ContainerID = pc.ContainerId WHERE pc.ProfileId = p.Id ORDER BY s.Path FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027\u0027) AS Container, (SELECT COUNT(DISTINCT cp.ClientId) FROM CLT_Jobs_Maintenance_Profiles cp JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = cp.ClientId AND c.IsRetired = 0 WHERE cp.ProfileId = p.Id) AS Clients, LEFT(p.TimeFrameDefinition, 4000) AS Zeitfenster, p.Id AS ProfilId FROM SYS_Jobs_Maintenance_Profiles p WHERE (@name IS NULL OR p.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (@client IS NULL OR EXISTS (SELECT 1 FROM CLT_Jobs_Maintenance_Profiles cp2 WHERE cp2.ProfileId = p.Id AND cp2.ClientId = @client)) ORDER BY p.Name",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teil des Namens des Wartungsfensters."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId-GUID - nur die Wartungsfenster, die fuer diesen Client gelten."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "default":  "100",
+                         "description":  "Hoechstzahl Zeilen, 1-500, Standard 100."
+                     }
+                 ]
+    },
+    {
         "name":  "acmp_teamviewer_ids",
         "description":  "TeamViewer-IDs aller Clients aus dem ACMP Custom Field \u0027TeamViewerID\u0027. Liefert Computername + ID fuer alle Clients mit befuelltem Feld. Verbindungs-URL: teamviewer10://control?device={ID}. Optional: @client fuer Einzelabfrage.",
         "sql":  "SELECT c.COMPUTERNAME AS Computername, v.CF_4982DC2075D548E887E5851FDD7E AS TeamViewerID FROM CLT_CLIENTS_TABLE c JOIN CF_VAL_C726C7A883D949388ED01A2C v ON v.CLIENTID = c.CLIENTID WHERE (@client IS NULL OR c.CLIENTID = @client) AND v.CF_4982DC2075D548E887E5851FDD7E IS NOT NULL AND v.CF_4982DC2075D548E887E5851FDD7E \u003c\u003e \u0027\u0027 ORDER BY c.COMPUTERNAME",

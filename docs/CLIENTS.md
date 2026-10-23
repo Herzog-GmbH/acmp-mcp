@@ -7,7 +7,7 @@ Der Server spricht MCP über **Streamable HTTP** (JSON-RPC 2.0 per `POST`). Jede
 | URL | `http://<HOST>:8765/` |
 | Header | `Authorization: Bearer <KEY>` |
 
-`<HOST>` ist euer ACMP-Server. `<KEY>` ist der **persönliche** API-Key von der Setup- bzw. Onboarding-Seite: Jede Person bekommt einen eigenen Key, damit die Freigabe weiß, wer was angefordert hat. Den Key behandelt ihr wie ein Admin-Passwort. Schreibt ihn nicht in Dateien, die in Git landen.
+`<HOST>` ist euer ACMP-Server. `<KEY>` ist der **persönliche** API-Key von der Setup- bzw. Onboarding-Seite: Jede Person bekommt einen eigenen Key, damit das Aktivitätsprotokoll zeigt, wer was ausgelöst hat. Den Key behandelt ihr wie ein Admin-Passwort. Schreibt ihn nicht in Dateien, die in Git landen.
 
 > Konfigurationsformate ändern sich bei den Clients gelegentlich. Funktioniert eine Vorlage nicht, in der Doku des Clients unter „MCP“ / „remote server“ / „HTTP“ nachsehen. Die zwei Angaben oben bleiben immer gleich.
 

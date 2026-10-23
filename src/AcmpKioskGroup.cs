@@ -195,12 +195,12 @@ partial class AcmpKiosk
             if (GroupName(c, gid) == null) throw new Exception("Kiosk-Ordner \"" + name + "\" " + gid + " gibt es nicht mehr - nichts geschrieben.");
             JObject snap = GroupSnapshot(c, gid);
             if (!JToken.DeepEquals(GroupStateOf(snap), before))
-                throw new Exception("Kiosk-Ordner \"" + name + "\" wurde seit der Anfrage geaendert (Name, Icon oder Filter) - nichts geschrieben, bitte neu beantragen.");
+                throw new Exception("Kiosk-Ordner \"" + name + "\" wurde seit der Planung geaendert (Name, Icon oder Filter) - nichts geschrieben, bitte erneut aufrufen.");
             string nde = Tok(after["nameDe"]), img = Tok(after["imageId"]);
             if (nde != null && nde != Tok(before["nameDe"]))
             {
                 string other = OtherGroupWithName(c, nde, gid);
-                if (other != null) throw new Exception("Einen Kiosk-Ordner \"" + nde + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte neu beantragen.");
+                if (other != null) throw new Exception("Einen Kiosk-Ordner \"" + nde + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte erneut aufrufen.");
             }
             if (img != null && !ImageExists(c, img)) throw new Exception("Icon " + img + " gibt es nicht mehr - nichts geschrieben.");
             var b = new JObject(); b["kind"] = "group"; b["grund"] = "vor acmp_kiosk_update_group"; b["von"] = requester; b["zeit"] = DateTime.Now.ToString("s");
@@ -281,7 +281,7 @@ partial class AcmpKiosk
             c.Open();
             if (GroupName(c, gid) == null) throw new Exception("Kiosk-Ordner " + gid + " gibt es nicht mehr - nichts geschrieben.");
             JObject sn = GroupSnapshot(c, gid);
-            if (!JToken.DeepEquals(GroupStateOf(sn), now)) throw new Exception("Kiosk-Ordner " + gid + " wurde seit der Anfrage geaendert - nichts geschrieben, bitte neu beantragen.");
+            if (!JToken.DeepEquals(GroupStateOf(sn), now)) throw new Exception("Kiosk-Ordner " + gid + " wurde seit der Planung geaendert - nichts geschrieben, bitte erneut aufrufen.");
             bool names = b["names"] is JObject && (Tok(now["nameDe"]) != Tok(was["nameDe"]) || Tok(now["nameEn"]) != Tok(was["nameEn"]));
             if (names && Tok(was["nameDe"]) != null && Tok(was["nameDe"]) != Tok(now["nameDe"]) && OtherGroupWithName(c, Tok(was["nameDe"]), gid) != null)
                 throw new Exception("Den gesicherten Namen \"" + Tok(was["nameDe"]) + "\" traegt inzwischen ein anderer Kiosk-Ordner - nichts geschrieben.");

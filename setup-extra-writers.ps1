@@ -2,15 +2,17 @@
 #   wum   Windows-Updates ablehnen / Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore)          Rechte: grant-wum-writer.sql
 #   unix  Unix Scripts anlegen, neue Version, Verteilungsring (acmp_unix_script_*), ab ACMP 6.10      Rechte: grant-unix-writer.sql
 #   cf    Individuelle Felder anlegen (acmp_cf_create)                                                Rechte: grant-cf-params.sql
+#   jobs  Dauerauftraege schalten/loeschen, Startbedingung, Client-Beschraenkung (acmp_job_*,          Rechte: grant-jobs-writer.sql
+#         acmp_container_set_restriction)                                                           (+ grant-jobs-writer2.sql)
 # acmp_cc_set_parameters (Parameter eines Client Commands) gehoert zum CC-Writer und braucht nur grant-cf-params.sql Abschnitt 3.
 #
 #   cd C:\ProgramData\AcmpMcp
 #   .\setup-extra-writers.ps1                      gefuehrt: fragt je Funktion nach
 #   .\setup-extra-writers.ps1 -Features wum,unix   nur diese einrichten
-#   .\setup-extra-writers.ps1 -Disable             alle drei wieder ausschalten (oder mit -Features nur einzelne)
+#   .\setup-extra-writers.ps1 -Disable             alle wieder ausschalten (oder mit -Features nur einzelne)
 #
 # Vorher (siehe docs\ACMP-VORBEREITUNG.md > "Weitere Schreib-Tools"):
-#   1. CC-Writer eingerichtet (setup-cc-writer.ps1) - alle drei nutzen dessen SQL-Login, Bediener-Liste und Freigabe-Einstellung
+#   1. CC-Writer eingerichtet (setup-cc-writer.ps1) - alle nutzen dessen SQL-Login und Bediener-Liste
 #   2. Datenbank gesichert, das passende grant-*.sql als SQL-Admin ausgefuehrt
 #
 # Das Skript prueft die Rechte des Schreib-Logins, BEVOR es config.local.json aendert, schaltet nur Funktionen ein, deren
@@ -36,11 +38,13 @@ $all = [ordered]@{
             Check = "acmp_unix_scripts mit status=true" }
   cf   = @{ Section = "cfWriter";   Name = "Individuelle Felder anlegen (acmp_cf_create)"; Sql = "grant-cf-params.sql"; Backup = "cf-backups";
             Check = "acmp_cf_list mit status=true" }
+  jobs = @{ Section = "jobWriter";  Name = "Jobs schalten, loeschen, Startbedingung setzen (acmp_job_*, acmp_container_set_restriction)"; Sql = "grant-jobs-writer.sql"; Backup = "jobs-backups";
+            Check = "acmp_jobs mit status=true" }
 }
 $sel = @(Split-ListArg $Features | ForEach-Object { $_.ToLowerInvariant() })
-foreach ($f in $sel) { if (-not $all.Contains($f)) { Write-Bad "Unbekannte Funktion '$f' (erlaubt: wum, unix, cf)"; exit 1 } }
+foreach ($f in $sel) { if (-not $all.Contains($f)) { Write-Bad "Unbekannte Funktion '$f' (erlaubt: wum, unix, cf, jobs)"; exit 1 } }
 
-Write-Title "ACMP-MCP-Server - weitere Schreib-Tools (Windows-Updates, Unix Scripts, individuelle Felder)"
+Write-Title "ACMP-MCP-Server - weitere Schreib-Tools (Windows-Updates, Unix Scripts, individuelle Felder, Jobs)"
 $cfg = Read-AcmpConfig $cfgPath
 
 function Save-WithBackup($cfg) {
@@ -65,7 +69,7 @@ if ($Disable) {
     Write-Ok ("aus: " + $all[$f].Name)
   }
   if ($n -gt 0) { Save-WithBackup $cfg; Restart-IfWanted }
-  Write-Info "Die Lesetools (acmp_wum_declined, acmp_unix_scripts, acmp_unix_results, acmp_cf_list) bleiben verfuegbar."
+  Write-Info "Die Lesetools (acmp_wum_declined, acmp_unix_scripts, acmp_unix_results, acmp_cf_list, acmp_jobs, acmp_get_jobs) bleiben verfuegbar."
   exit 0
 }
 
@@ -79,7 +83,7 @@ $req = @($cfg.ccWriter.allowedRequesters | Where-Object { $_ })
 if (-not $req) { Write-Bad "ccWriter.allowedRequesters ist leer - zuerst .\setup-cc-writer.ps1 (oder -AddRequester)."; exit 1 }
 
 Write-Hint "Direktes Schreiben in die ACMP-Datenbank ist von Aagon nicht vorgesehen. Vorher die Datenbank sichern."
-Write-Info "Jede Schreibaktion dieser Tools laeuft IMMER ueber die Vier-Augen-Freigabe (auch bei bypassAll) und wird vorher gesichert."
+Write-Info "Jede Schreibaktion dieser Tools zeigt mit dryRun vorher eine Vorschau, wird gesichert und steht im Aktivitaetsprotokoll."
 Write-Info ("Bediener mit Schreibrecht (aus ccWriter.allowedRequesters): " + ($req -join ", "))
 Write-Info "Getestet mit ACMP 6.10. Auf anderen Versionen sperrt die Vorpruefung, bis allowUntested gesetzt ist (nicht empfohlen)."
 
@@ -116,6 +120,8 @@ $need = @{
            "dbo.SYS_AccessControl_AclEntries_Users|OBJECT|INSERT", "dbo.SYS_AccessControl_AclEntries_Groups|OBJECT|INSERT")
   cf   = @("dbo.mcp_cf_create_table|OBJECT|EXECUTE", "dbo.mcp_cf_add_column|OBJECT|EXECUTE",
            "dbo.SYS_TableRelations|OBJECT|INSERT", "dbo.SYS_CustomFields|OBJECT|INSERT", "dbo.VW_SYS_DISPLAYFIELDS|OBJECT|INSERT")
+  jobs = @("dbo.SYS_Jobs|OBJECT|SELECT", "dbo.SYS_Jobs|OBJECT|UPDATE|Conditions", "dbo.SYS_Jobs|OBJECT|UPDATE|ConditionCheckSum",
+           "dbo.SYS_Jobs_Logs|OBJECT|SELECT", "dbo.SYS_Jobs_Logs|OBJECT|UPDATE|ConditionText")
 }
 $ready = @()
 try {
@@ -133,6 +139,12 @@ try {
     }
     if ($f -eq "cf") {
       if (Test-Perm "" "DATABASE" "CREATE TABLE") { Write-Hint "Der Login darf selbst Tabellen anlegen - das braucht er nicht (die DDL laeuft ueber die Prozeduren). Empfohlen: db_ddladmin/db_owner entfernen." }
+    }
+    if ($f -eq "jobs") {
+      if (-not ((Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "SELECT") -and (Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "DELETE"))) { Write-Hint "Ohne SELECT/DELETE auf SYS_Templates_Jobs bleibt acmp_job_delete gesperrt (grant-jobs-writer.sql)." }
+      if (-not ((Test-Perm "dbo.SYS_Jobs" "OBJECT" "INSERT") -and (Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "INSERT") -and (Test-Perm "dbo.SYS_Templates" "OBJECT" "SELECT") -and (Test-Perm "dbo.SYS_Jobs_Logs" "OBJECT" "UPDATE" "State"))) { Write-Hint "Ohne INSERT auf SYS_Jobs/SYS_Templates_Jobs, SELECT auf SYS_Templates und UPDATE(State) auf SYS_Jobs_Logs bleibt acmp_job_restore gesperrt (grant-jobs-writer.sql)." }
+      if (-not ((Test-Perm "dbo.CLT_CONTAINER_STRUCTURE" "OBJECT" "SELECT") -and (Test-Perm "dbo.CLT_CONTAINER_STRUCTURE" "OBJECT" "UPDATE" "ClientRestriction"))) { Write-Info "acmp_container_set_restriction bleibt gesperrt, bis grant-jobs-writer2.sql gelaufen ist (der Rest des Job-Writers geht ohne)." }
+      if (Test-Perm "dbo.SYS_Jobs" "OBJECT" "DELETE") { Write-Hint "Der Login darf SYS_Jobs LOESCHEN - das braucht er nicht (das Tool loescht nur ueber SYS_Templates_Jobs). Empfohlen: Recht entziehen." }
     }
     $ready += $f
   }
@@ -158,7 +170,7 @@ foreach ($f in $ready) {
   if (-not $cfg.$s) { $cfg | Add-Member -NotePropertyName $s -NotePropertyValue ([pscustomobject]@{}) }
   $w = $cfg.$s
   Set-CfgProp $w "enabled" $true
-  Set-CfgProp $w "approvalGate" $true
+  if ($w.PSObject.Properties["approvalGate"]) { $w.PSObject.Properties.Remove("approvalGate") }
   if (-not $w.PSObject.Properties["allowUntested"]) { Set-CfgProp $w "allowUntested" $false }
   if (-not $w.PSObject.Properties["backupDir"]) { Set-CfgProp $w "backupDir" $all[$f].Backup }
   if ($f -eq "wum" -and -not $w.PSObject.Properties["rebuildFlags"]) { Set-CfgProp $w "rebuildFlags" $true }
@@ -169,6 +181,7 @@ Restart-IfWanted
 
 Write-Host ""
 foreach ($f in $ready) { Write-Ok ("eingerichtet: " + $all[$f].Name + " - pruefen im MCP-Client: " + $all[$f].Check) }
-Write-Info "Dort muss die Vorpruefung bestanden sein. Jede Schreibaktion erscheint als Anfrage auf der Freigabe-Seite."
+Write-Info "Dort muss die Vorpruefung bestanden sein. Jede Schreibaktion steht danach im Aktivitaetsprotokoll (Weboberflaeche > Aktivitaet)."
+if ($ready -contains "jobs") { Write-Info "Jobs: Startbedingung und Client-Beschraenkung gelten je Container fuer alle seine Dauerauftraege. Zuruecknehmen mit acmp_job_restore (Sicherung in jobs-backups)." }
 if ($ready -contains "unix") { Write-Info "Unix Scripts: Den Job startet ihr in der ACMP-Console (Container/Abfrage > Unix-Jobs ausfuehren). Ohne Unix-Script-Lizenz meldet der Job 'Erfolg', laeuft aber nicht - acmp_unix_results weist darauf hin." }
 Write-Info "Ausschalten: .\setup-extra-writers.ps1 -Disable"

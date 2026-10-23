@@ -2,8 +2,8 @@
 // Standardmaessig AUS (ccWriter.enabled). Direktes Schreiben in die ACMP-DB ist von Aagon nicht vorgesehen.
 // Sicherheitsregeln:
 //  - Schreiben nur mit eigenem, eng berechtigtem SQL-Login (ccWriter.connectionString), nie mit dem Lese-Login.
-//  - Nur Antragsteller aus ccWriter.allowedRequesters; jede Schreibaktion laeuft ueber die Vier-Augen-Freigabe
-//    (ccWriter.approvalGate, Standard true) und nur nach bestandener Kompatibilitaetspruefung (AcmpCcPreflight).
+//  - Nur Antragsteller aus ccWriter.allowedRequesters und nur nach bestandener Kompatibilitaetspruefung (AcmpCcPreflight);
+//    jede Schreibaktion steht im Aktivitaetsprotokoll, die Notbremse sperrt alle.
 //  - Neu angelegt wird immer als Entwurf (State 1), nie freigegeben. Aendern nur eigene Entwuerfe
 //    (in cc-drafts.json registriert UND State 1). Freigeben passiert in der ACMP-Console.
 //  - Vor jeder Aenderung Sicherung der betroffenen Spalten nach ccWriter.backupDir; ohne Sicherung kein Schreiben.
@@ -60,8 +60,6 @@ partial class AcmpCcWriter
     public bool ConfigOk { get; private set; }
     public bool WriteEnabled { get { return ConfigOk; } }
     public string DisabledReason { get; private set; }
-    // ccWriter.approvalGate (Standard true): Schreibaktionen laufen ueber die Vier-Augen-Freigabe
-    public bool ApprovalGate { get; private set; }
     public IEnumerable<string> FileSourceRoots { get { return _fileSourceRoots; } }
     public ICollection<string> AllowedFolders { get { return _allowedFolders; } }
     public ICollection<string> AllowedRequesters { get { return _allowed; } }
@@ -88,11 +86,10 @@ partial class AcmpCcWriter
         _fileRepoRoot = cfg != null && cfg["fileRepositoryRoot"] != null && ((string)cfg["fileRepositoryRoot"]).Trim().Length > 0
             ? ((string)cfg["fileRepositoryRoot"]).Trim().TrimEnd('\\') : null;
         _maxFileBytes = (cfg != null && cfg["maxFileMB"] != null ? (long)cfg["maxFileMB"] : 2048L) * 1024 * 1024;
-        ApprovalGate = cfg == null || cfg["approvalGate"] == null || (bool)cfg["approvalGate"];
         _allowUntested = cfg != null && cfg["allowUntested"] != null && (bool)cfg["allowUntested"];
         _preflightSample = cfg != null && cfg["preflightSample"] != null ? (int)cfg["preflightSample"] : 50;
         if (cfg == null || cfg["enabled"] == null || !(bool)cfg["enabled"]) { DisabledReason = "ccWriter.enabled ist nicht true (schreibende Aktionen ausgeschaltet)"; return; }
-        if (cfg["approvers"] != null) _log("Hinweis: ccWriter.approvers wird nicht mehr verwendet - die Freigabe steuert ccWriter.approvalGate (Standard true).");
+        if (cfg["approvers"] != null || cfg["approvalGate"] != null) _log("Hinweis: ccWriter.approvers/approvalGate werden nicht mehr verwendet - die Vier-Augen-Freigabe ist abgeschafft (Aktivitaetsprotokoll und Notbremse auf der Webseite).");
         _writeCs = (string)cfg["connectionString"];
         _templateId = GuidBraces((string)cfg["templateScriptId"]);
         JArray ar = cfg["allowedRequesters"] as JArray;
@@ -178,8 +175,8 @@ partial class AcmpCcWriter
         }
     }
 
-    // ================= Freigabe-Vorschau =================
-    // Die Version, die ACMP beim Einreihen ausfuehrt (neueste freigegebene, State 7), lesbar fuer die Freigabeseite.
+    // ================= Freigegebene Version lesbar =================
+    // Die Version, die ACMP beim Einreihen ausfuehrt (neueste freigegebene, State 7), lesbar (Vorschau).
     // hash = SHA-256 des CLIENTSCRIPT-Blobs; der Server vergleicht ihn vor der Ausfuehrung, damit nach der Freigabe
     // kein geaenderter Command laeuft. Kennwoerter maskiert (NodeToJson).
     public JObject ReleasedSnapshot(string scriptId)
@@ -789,7 +786,7 @@ partial class AcmpCcWriter
 
     // ================= Schreiben =================
 
-    // Vor jeder Schreibaktion (und schon beim Anlegen einer Freigabe-Anfrage): eingeschaltet, Antragsteller erlaubt,
+    // Vor jeder Schreibaktion (und schon beim Planen): eingeschaltet, Antragsteller erlaubt,
     // Kompatibilitaetspruefung bestanden; bei Datei-Aktionen zusaetzlich Datei-Rechte und File Repository.
     public void CheckWrite(string requester, bool fileOp)
     {
@@ -801,7 +798,7 @@ partial class AcmpCcWriter
     }
     void CheckWrite(string requester) { CheckWrite(requester, false); }
 
-    // Lesbare Vorschau eines Skripts fuer die Freigabeseite (gleiches Format wie die Anzeige freigegebener Commands)
+    // Lesbare Vorschau eines Skripts (gleiches Format wie die Anzeige freigegebener Commands)
     public JArray PreviewScript(List<string> head, CcScript s)
     {
         var lines = new List<string>(head);
@@ -825,7 +822,7 @@ partial class AcmpCcWriter
         return new JArray(lines.ToArray());
     }
 
-    // Wiederherstellen: Inhalt der Sicherung fuer die Freigabeseite
+    // Wiederherstellen: Inhalt der Sicherung fuer die Vorschau
     public JArray PreviewRestore(string backupName)
     {
         if (string.IsNullOrEmpty(backupName) || backupName.IndexOfAny(new[] { '/', '\\' }) >= 0 || !backupName.EndsWith(".json"))
@@ -943,7 +940,7 @@ partial class AcmpCcWriter
     // acmp_cc_update_draft wie acmp_cc_new_version (seit 22.10.2026; vorher wurden ohne 'variables' alle Projektvariablen geloescht und
     // Schritt-IDs immer neu vergeben): ohne 'variables' bleiben die Projektvariablen des Entwurfs samt Startwerten, Schritt-IDs des Entwurfs
     // bleiben (fremde IDs werden neu vergeben), '***' in Kennwortfeldern uebernimmt das gespeicherte Kennwort desselben Schritts.
-    // Schreibt Schritte (Kurzform aufgeloest, IDs fest) und Variablen in 'a' zurueck: beim Beantragen sind das die eingefrorenen Argumente,
+    // Schreibt Schritte (Kurzform aufgeloest, IDs fest) und Variablen in 'a' zurueck: das sind die festgehaltenen Argumente,
     // die Ausfuehrung erzeugt daraus genau den Inhalt der Vorschau (_stepIdsFixed: IDs nicht noch einmal gegen den Entwurf pruefen).
     public CcScript BuildDraftUpdate(JObject a, out List<string> notes)
     {
@@ -1167,7 +1164,7 @@ partial class AcmpCcWriter
             long len = new FileInfo(tmp).Length;
             if (len != fi.Length) { File.Delete(tmp); throw new Exception("Kopie unvollstaendig (" + len + " statt " + fi.Length + " Byte). Nichts geaendert."); }
             if (!string.IsNullOrEmpty(expectSha256) && !string.Equals(BitConverter.ToString(hash).Replace("-", ""), expectSha256, StringComparison.OrdinalIgnoreCase))
-            { File.Delete(tmp); throw new Exception("Quelldatei hat sich seit der Freigabe-Anfrage geaendert (SHA-256 weicht ab). Nichts angehaengt - bitte neu beantragen."); }
+            { File.Delete(tmp); throw new Exception("Quelldatei hat sich seit der Planung geaendert (SHA-256 weicht ab). Nichts angehaengt - bitte erneut aufrufen."); }
             File.Move(tmp, dest);
             Guid fileId = Guid.NewGuid();
             int kb;

@@ -14,7 +14,7 @@
 //    des Ordners bleiben (wie beim Verschieben von Commands). Oberster Ordner (StrucLevel 1) und Aagon-Standardordner
 //    (StrucLevel 0) bleiben unangetastet.
 // Sicherheitsregeln wie beim CC-Writer: Antragsteller aus ccWriter.allowedRequesters, Kompatibilitaetspruefung bestanden,
-// Vier-Augen-Freigabe mit eingefrorenem Plan, Sicherung vor jedem Verschieben bzw. Aendern von Ordnern (zurueck mit undo=...).
+// erst dryRun (Vorschau), Plan direkt vor dem Schreiben, Sicherung vor jedem Verschieben bzw. Aendern von Ordnern (zurueck mit undo=...).
 // Optional ccWriter.moveScopeFolderIds: nur innerhalb dieser Ordner (samt Unterordnern) verschieben, anlegen und aendern.
 // Loeschen von Ordnern bleibt Sache der Console.
 using System;
@@ -48,7 +48,7 @@ partial class AcmpCcWriter
     public const int MaxMoves = 100;
     public const int MaxNewFolders = 50, MaxFolderChanges = 50;
     public const int MaxFolderName = 200;   // SYS_SCRIPT_STRUCTURE.Description nvarchar(200)
-    const int MaxListed = 15;               // laengere Ergebnislisten kuerzen (acmp_approval_status zeigt 4000 Zeichen)
+    const int MaxListed = 15;               // laengere Ergebnislisten kuerzen (die Antwort soll im Chat lesbar bleiben)
     static readonly string[] RootAliases = { "Available commands", "Verfügbare Client Commands", "Verfuegbare Client Commands" };
     static readonly string[] MoveKeys = { "command", "folder" };
     static readonly string[] AddFolderKeys = { "name", "parent" };
@@ -620,7 +620,7 @@ partial class AcmpCcWriter
         return d;
     }
 
-    // ================= Planen (dryRun und Freigabe-Anfrage) =================
+    // ================= Planen (dryRun und Ausfuehrung) =================
 
     public JObject PlanFolderOp(string tool, JObject a)
     {
@@ -841,7 +841,7 @@ partial class AcmpCcWriter
             throw new Exception("acmp_cc_update_folder gesperrt - Vorpruefung \"Ordner aendern\" nicht bestanden (Details: acmp_cc_writer_status). Nichts geschrieben.");
     }
 
-    // Ohne Freigabe-Gate wird hier geplant und sofort ausgefuehrt; mit Gate kommt der eingefrorene Plan (_plan) aus der Anfrage.
+    // Plant und fuehrt sofort aus (ein _plan kommt nur vom Server, Aufruf-Argumente mit _ verwirft der Server).
     public JObject RunFolderOp(string tool, JObject a, string requester)
     {
         CheckFolderWrite(tool, requester);
@@ -868,7 +868,7 @@ partial class AcmpCcWriter
                 JObject cmd;
                 if (!one.TryGetValue(id, out cmd)) throw new Exception("\"" + name + "\" " + id + " gibt es nicht mehr - nichts geaendert.");
                 if (!string.Equals((string)cmd["folderId"], (string)m["from"], StringComparison.OrdinalIgnoreCase) || (int)cmd["version"] != (int)m["version"])
-                    throw new Exception("\"" + name + "\" wurde seit der Anfrage verschoben oder neu gespeichert - nichts geaendert, bitte neu beantragen.");
+                    throw new Exception("\"" + name + "\" wurde seit der Planung verschoben oder neu gespeichert - nichts geaendert, bitte erneut aufrufen.");
                 CcFolder dst;
                 if (!all.TryGetValue((string)m["to"], out dst)) throw new Exception("Zielordner \"" + m["toPath"] + "\" gibt es nicht mehr - nichts geaendert.");
                 if (!InScope(all, dst, _moveScope)) throw new Exception("Zielordner \"" + dst.Path + "\" liegt ausserhalb von ccWriter.moveScopeFolderIds - nichts geaendert.");
@@ -920,7 +920,7 @@ partial class AcmpCcWriter
         return MoveResult(moves, Path.GetFileName(backup));
     }
 
-    // Ergebnis von acmp_cc_move: Sicherung zuerst (acmp_approval_status zeigt nur 4000 Zeichen), je Zielordner die Anzahl,
+    // Ergebnis von acmp_cc_move: Sicherung zuerst (die Antwort soll im Chat lesbar bleiben), je Zielordner die Anzahl,
     // dann die Liste - bei vielen Eintraegen gekuerzt, vollstaendig steht sie in der Sicherung.
     public static JObject MoveResult(JArray moves, string backupName)
     {
@@ -1035,13 +1035,13 @@ partial class AcmpCcWriter
                 CcFolder f;
                 if (!all.TryGetValue(id, out f)) throw new Exception("Ordner \"" + ch["oldPath"] + "\" gibt es nicht mehr - nichts geaendert.");
                 if (!string.Equals(f.Name, (string)ch["oldName"], StringComparison.Ordinal) || !string.Equals(f.ParentId, (string)ch["oldParentId"], StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("\"" + ch["oldPath"] + "\" wurde seit der Anfrage geaendert (jetzt \"" + f.Path + "\") - nichts geaendert, bitte neu beantragen.");
+                    throw new Exception("\"" + ch["oldPath"] + "\" wurde seit der Planung geaendert (jetzt \"" + f.Path + "\") - nichts geaendert, bitte erneut aufrufen.");
                 if (!all.ContainsKey((string)ch["newParentId"])) throw new Exception("Der neue Elternordner von \"" + ch["oldPath"] + "\" (\"" + ch["newPath"] + "\") gibt es nicht mehr - nichts geaendert.");
                 list.Add(new[] { id, (string)ch["newName"], (string)ch["newParentId"] });
             }
             // Dieselben Pruefungen wie bei der Anfrage gegen den jetzigen Stand: Zyklen, gleichnamige Geschwister, Aagon-Ordner, Bereich
             List<CcFolderChange> now = PlanFolderChanges(all, list, _moveScope, null);
-            if (now.Count != changes.Count) throw new Exception("Der Ordnerbaum hat sich seit der Anfrage geaendert - nichts geaendert, bitte neu beantragen.");
+            if (now.Count != changes.Count) throw new Exception("Der Ordnerbaum hat sich seit der Planung geaendert - nichts geaendert, bitte erneut aufrufen.");
             var b = new JObject();
             b["kind"] = "folders"; b["batchId"] = p["batchId"]; b["zeit"] = DateTime.Now.ToString("s"); b["von"] = requester;
             b["grund"] = p["undoOf"] != null ? "vor acmp_cc_update_folder undo=" + p["undoOf"] : "vor acmp_cc_update_folder";

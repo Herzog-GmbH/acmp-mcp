@@ -346,7 +346,7 @@ partial class AcmpKiosk
                 if (ResolveItem(c, iid) == null) throw new Exception("Eintrag \"" + name + "\" " + iid + " gibt es nicht mehr - nichts geschrieben.");
                 JObject snap = ItemSnapshot(c, iid);
                 if (!JToken.DeepEquals(StateOf(snap), pc["before"]))
-                    throw new Exception("Eintrag \"" + name + "\" wurde seit der Anfrage geaendert (Ordner, Name, Beschreibung, Icon oder Filter) - nichts geschrieben, bitte neu beantragen.");
+                    throw new Exception("Eintrag \"" + name + "\" wurde seit der Planung geaendert (Ordner, Name, Beschreibung, Icon oder Filter) - nichts geschrieben, bitte erneut aufrufen.");
                 RequireAllowedGroup(Tok(pc["before"]["groupId"]), "Eintrag \"" + name + "\"");
                 JObject after = (JObject)pc["after"];
                 string gid = Tok(after["groupId"]), img = Tok(after["imageId"]);
@@ -480,7 +480,7 @@ partial class AcmpKiosk
                 if (!saved.TryGetValue(iid, out was)) throw new Exception("Eintrag " + iid + " steht nicht in der Sicherung - nichts geschrieben.");
                 if (ResolveItem(c, iid) == null) throw new Exception("Eintrag \"" + e["name"] + "\" gibt es nicht mehr - nichts geschrieben.");
                 JObject sn = ItemSnapshot(c, iid);
-                if (!JToken.DeepEquals(StateOf(sn), e["now"])) throw new Exception("Eintrag \"" + e["name"] + "\" wurde seit der Anfrage geaendert - nichts geschrieben, bitte neu beantragen.");
+                if (!JToken.DeepEquals(StateOf(sn), e["now"])) throw new Exception("Eintrag \"" + e["name"] + "\" wurde seit der Planung geaendert - nichts geschrieben, bitte erneut aufrufen.");
                 string gid = Tok(was["item"]["GroupId"]);
                 RequireAllowedGroup(Tok(e["now"]["groupId"]), "Eintrag \"" + e["name"] + "\"");
                 RequireAllowedGroup(gid, "Gesicherter Ordner von \"" + e["name"] + "\"");

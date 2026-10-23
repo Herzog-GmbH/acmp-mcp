@@ -390,7 +390,6 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
     public IKioskLookup Lookup;
     public bool ConfigOk { get; private set; }
     public string DisabledReason { get; private set; }
-    public bool ApprovalGate { get; private set; }
     public ICollection<string> AllowedGroups { get { return _allowedGroups; } }
     public ICollection<string> AllowedRequesters { get { return _allowedReq; } }
 
@@ -436,8 +435,6 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
         Lookup = new AdDbLookup(readCs);
         string bd = cfg != null && cfg["backupDir"] != null ? (string)cfg["backupDir"] : "kiosk-backups";
         _backupDir = Path.IsPathRooted(bd) ? bd : Path.Combine(cfgDir, bd);
-        JToken gate = cfg != null && cfg["approvalGate"] != null ? cfg["approvalGate"] : (ccCfg != null ? ccCfg["approvalGate"] : null);
-        ApprovalGate = gate == null || (bool)gate;
         _allowUntested = cfg != null && cfg["allowUntested"] != null && (bool)cfg["allowUntested"];
         InitImages(cfg, ccCfg);
         if (cfg == null || cfg["enabled"] == null || !(bool)cfg["enabled"]) { DisabledReason = "kioskWriter.enabled ist nicht true (nur Lesen und dryRun)"; return; }
@@ -819,7 +816,6 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
         o["erlaubteOrdner"] = new JArray(new List<string>(_allowedGroups).ToArray());
         List<string> own = McpCreatedGroups();
         if (own.Count > 0) o["vomMcpAngelegteOrdner"] = new JArray(own.ToArray());
-        o["freigabeGate"] = ApprovalGate;
         if (refresh) o["pruefungen"] = pf != null ? pf["checks"] : null;
         return o;
     }
@@ -1227,7 +1223,7 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
         if (pf == null || !(bool)pf["ok"]) throw new Exception("Kiosk-Schreiben gesperrt - Vorpruefung nicht bestanden: " + (pf != null ? (string)pf["summary"] : "keine Pruefung") + " (Details: acmp_kiosk_tree mit status=true). Nichts geschrieben.");
     }
 
-    // Fuehrt einen Plan aus (eingefroren aus der Freigabe oder frisch geplant). Prueft vorher erneut, ob sich nichts geaendert hat.
+    // Fuehrt einen Plan aus (frisch geplant). Prueft vorher erneut, ob sich nichts geaendert hat.
     public JObject Execute(string tool, JObject a, string requester)
     {
         CheckWrite(requester);
@@ -1336,7 +1332,7 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
                 rc.Open();
                 if (GroupName(rc, gid) != null) throw new Exception("Kiosk-Ordner " + gid + " gibt es schon - nichts geschrieben.");
                 string other = GroupIdByName(rc, nde);
-                if (other != null) throw new Exception("Einen Kiosk-Ordner \"" + nde + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte neu beantragen.");
+                if (other != null) throw new Exception("Einen Kiosk-Ordner \"" + nde + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte erneut aufrufen.");
                 if (!ImageExists(rc, img)) throw new Exception("Icon " + img + " gibt es nicht mehr - nichts geschrieben.");
             }
             using (SqlTransaction tx = c.BeginTransaction())
@@ -1371,7 +1367,7 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
             c.Open();
             string now = CurrentExpression(c, tid);
             string prev = p["previousExpression"] != null && p["previousExpression"].Type != JTokenType.Null ? (string)p["previousExpression"] : null;
-            if (now != prev) throw new Exception("Der Filter von \"" + p["target"]["name"] + "\" wurde seit der Anfrage geaendert (jetzt: " + (now ?? "keiner") + ") - nichts geschrieben, bitte neu beantragen.");
+            if (now != prev) throw new Exception("Der Filter von \"" + p["target"]["name"] + "\" wurde seit der Planung geaendert (jetzt: " + (now ?? "keiner") + ") - nichts geschrieben, bitte erneut aufrufen.");
             backup = BackupFilter(c, tid, "vor acmp_kiosk_set_filter", requester);
             using (SqlTransaction tx = c.BeginTransaction())
             {
@@ -1451,7 +1447,7 @@ partial class AcmpKiosk   // Bilder: AcmpKioskImages.cs, Aendern/Verschieben: Ac
                 string tid = (string)b["targetId"];
                 string now = CurrentExpression(c, tid);
                 string prev = p["previousExpression"] != null && p["previousExpression"].Type != JTokenType.Null ? (string)p["previousExpression"] : null;
-                if (now != prev) throw new Exception("Filter wurde seit der Anfrage geaendert - nichts geschrieben.");
+                if (now != prev) throw new Exception("Filter wurde seit der Planung geaendert - nichts geschrieben.");
                 again = BackupFilter(c, tid, "vor acmp_kiosk_restore", requester);
                 using (SqlTransaction tx = c.BeginTransaction())
                 {

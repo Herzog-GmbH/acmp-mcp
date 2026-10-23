@@ -248,7 +248,7 @@ static class KioskImage
 
 // Vorschau fuer den Chat: jedes Bild als PNG (MCP-Inhaltstyp image), laengste Seite hoechstens Box Pixel,
 // kleine Icons hoechstens 2-fach vergroessert. Typ und Mass prueft vorher KioskImage.Inspect (Groesse begrenzt der Aufrufer).
-// SVG kann System.Drawing nicht zeichnen -> keine Vorschau (die Freigabe-Seite zeigt SVG im Browser).
+// SVG kann System.Drawing nicht zeichnen -> keine Vorschau (SVG zeigt nur der Browser).
 static class KioskPreview
 {
     public const int Box = 128, MaxUpscale = 2;
@@ -260,7 +260,7 @@ static class KioskPreview
         try
         {
             KioskImage.Info info = KioskImage.Inspect(data, null);
-            if (info.Kind == "SVG") { note = "SVG - keine Vorschau im Chat (die Freigabe-Seite zeigt es)"; return null; }
+            if (info.Kind == "SVG") { note = "SVG - keine Vorschau im Chat (im Browser oder in der Console ansehen)"; return null; }
             using (SD.Bitmap src = Decode(data, info.Mime))
             {
                 double f = Math.Min((double)Box / src.Width, (double)Box / src.Height);
@@ -751,7 +751,7 @@ partial class AcmpKiosk
         AddPreview(arr, label + ": " + ImageLabel(c, imageId), RepoBytes(imageId));
     }
 
-    // Vorschaubilder fuer dryRun und Freigabe-Anfrage im Chat (das Icon, um das es geht; bei set_image bisher und neu)
+    // Vorschaubilder fuer dryRun und Ausfuehrung im Chat (das Icon, um das es geht; bei set_image bisher und neu)
     public JArray ChatPreviews(JObject plan)
     {
         var arr = new JArray();
@@ -777,7 +777,7 @@ partial class AcmpKiosk
         return arr;
     }
 
-    // Vorschaubild fuer die Freigabe-Seite (Daten-URI): beim Hochladen aus dem Plan, sonst aus der Ablage bzw. Sicherung
+    // Vorschaubild als Daten-URI (Webseite): beim Hochladen aus dem Plan, sonst aus der Ablage bzw. Sicherung
     public JObject PreviewImage(JObject plan)
     {
         try
@@ -928,7 +928,7 @@ partial class AcmpKiosk
             rc.Open();
             if (ImageExists(rc, id)) throw new Exception("Bild " + id + " gibt es schon - nichts geschrieben.");
             string other = ImageIdByName(rc, (string)p["name"]);
-            if (other != null) throw new Exception("Ein Bild \"" + p["name"] + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte neu beantragen.");
+            if (other != null) throw new Exception("Ein Bild \"" + p["name"] + "\" gibt es inzwischen (" + other + ") - nichts geschrieben, bitte erneut aufrufen.");
             if (!string.Equals((string)ResolveImageFolder(rc)["id"], (string)p["folder"]["id"], StringComparison.OrdinalIgnoreCase)) throw new Exception("Bildordner hat sich geaendert - nichts geschrieben.");
         }
         if (File.Exists(file)) throw new Exception("Datei " + file + " gibt es schon - nichts geschrieben.");
@@ -990,7 +990,7 @@ partial class AcmpKiosk
                 var q = Cmd(c, tx, "UPDATE " + (isItem ? "SYS_Kiosk_Items" : "SYS_Kiosk_Groups") + " SET ImageId=@new WHERE Id=@id AND " + (prev != null ? "ImageId=@old" : "ImageId IS NULL"));
                 q.Parameters.AddWithValue("@new", G(img)); q.Parameters.AddWithValue("@id", G(tid));
                 if (prev != null) q.Parameters.AddWithValue("@old", G(prev));
-                if (q.ExecuteNonQuery() != 1) throw new Exception("Das Icon von \"" + t["name"] + "\" wurde seit der Anfrage geaendert - nichts geschrieben, bitte neu beantragen.");
+                if (q.ExecuteNonQuery() != 1) throw new Exception("Das Icon von \"" + t["name"] + "\" wurde seit der Planung geaendert - nichts geschrieben, bitte erneut aufrufen.");
                 tx.Commit();
             }
         }

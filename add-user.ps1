@@ -1,18 +1,19 @@
 # Weiteren Bediener fuer den ACMP-MCP-Server anlegen (braucht Admin-Rechte - startet sich bei Bedarf selbst erhoeht neu).
 #   cd C:\ProgramData\AcmpMcp
 #   .\add-user.ps1
-#   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm -Approver -Email m.mustermann@firma.de [-Writer]
+#   .\add-user.ps1 -Name mmustermann -AcmpUser admin_mm [-NoWeb] [-Writer]
 #
-# Wie /onboarding auf der Weboberflaeche, nur im Terminal: erzeugt MCP-API-Key und optional
-# einen Freigabe-Login, startet den Dienst neu und zeigt am Ende Links und Client-Konfiguration.
+# Wie /onboarding auf der Weboberflaeche, nur im Terminal: erzeugt MCP-API-Key und (ohne -NoWeb) einen
+# Login fuer die Weboberflaeche, startet den Dienst neu und zeigt am Ende Zugang und Client-Konfiguration.
 # Ist der CC-Writer eingerichtet, fragt es zusaetzlich, ob die Person Client Commands und den Kiosk
 # schreiben darf (ccWriter.allowedRequesters). Ueber /onboarding angelegte Bediener schaltet ihr dafuer
 # mit .\setup-cc-writer.ps1 -AddRequester <kurzname> frei.
 param(
   [string]$Name,
   [string]$AcmpUser,
-  [switch]$Approver,
-  [string]$Email,
+  [switch]$NoWeb,
+  [switch]$Approver,   # veraltet (Version 1), wird ignoriert - Web-Zugang gibt es ohne -NoWeb immer
+  [string]$Email,      # veraltet (Version 1), wird ignoriert
   [switch]$Writer,
   [switch]$NonInteractive
 )
@@ -27,10 +28,10 @@ if (-not (Test-Path $cfgPath)) { Write-Bad "config.local.json fehlt - zuerst ins
 Write-Title "ACMP-MCP-Server - neuen Bediener anlegen"
 $cfg = Read-AcmpConfig $cfgPath
 $existing = @(Get-McpUsers $cfg)
-$apprNames = @(Get-Approvers $cfg | ForEach-Object { $_.name })
+$webNames = @(Get-WebUsers $cfg | ForEach-Object { $_.name })
 if ($existing.Count) {
   Write-Info "Vorhandene Bediener:"
-  foreach ($u in $existing) { Write-Info ("  - {0,-20} ACMP: {1,-16} Freigeber: {2}" -f $u.name, $(if ($u.acmpUser) { $u.acmpUser } else { "-" }), $(if ($apprNames -contains $u.name) { "ja" } else { "-" })) }
+  foreach ($u in $existing) { Write-Info ("  - {0,-20} ACMP: {1,-16} Web-Zugang: {2}" -f $u.name, $(if ($u.acmpUser) { $u.acmpUser } else { "-" }), $(if ($webNames -contains $u.name) { "ja" } else { "-" })) }
 }
 
 Write-Step 1 3 "Angaben"
@@ -46,26 +47,22 @@ if (-not $PSBoundParameters.ContainsKey('AcmpUser') -and $ask) {
   Write-Info "Lokaler ACMP-Benutzer der Person (in der ACMP-Konsole angelegt). Dann prueft ACMP ihre echten Rechte."
   $AcmpUser = Read-Value "ACMP-Benutzername (optional)" "" '^([A-Za-z0-9_.-]{2,32})?$' "Nur Buchstaben, Zahlen und . _ -"
 }
-$isApprover = [bool]$Approver
-if (-not $PSBoundParameters.ContainsKey('Approver') -and $ask) {
-  Write-Info "Freigeber duerfen Schreib-/Ausfuehrbefehle anderer auf der Freigabe-Seite zustimmen."
-  $isApprover = Read-YesNo "Soll '$Name' auch Freigeber sein?" $true
-}
-if ($isApprover -and -not $Email) {
-  if (-not $ask) { throw "-Email fehlt (Pflicht fuer Freigeber)." }
-  $Email = Read-Value "E-Mail fuer Freigabe-Benachrichtigungen" "" '^[^@\s]+@[^@\s]+$' "Bitte eine gueltige E-Mail-Adresse."
+$hasWeb = -not $NoWeb
+if (-not $PSBoundParameters.ContainsKey('NoWeb') -and $ask) {
+  Write-Info "Die Weboberflaeche zeigt Aktivitaetsprotokoll und Notbremse und erlaubt das Onboarding weiterer Bediener."
+  $hasWeb = Read-YesNo "Soll '$Name' Zugang zur Weboberflaeche bekommen?" $true
 }
 $ccOn = $cfg.ccWriter -and $cfg.ccWriter.enabled
 $isWriter = [bool]$Writer
 if ($ccOn -and -not $PSBoundParameters.ContainsKey('Writer') -and $ask) {
   Write-Info "Schreib-Tools (Client Commands als Entwurf, Freigeben, Ordner, Kiosk) laufen ueber einen eigenen SQL-Login des Servers."
-  Write-Info "Wer sie beantragen darf, steht in ccWriter.allowedRequesters. Zustimmen muss trotzdem ein Freigeber."
-  $isWriter = Read-YesNo "Darf '$Name' diese Schreib-Tools beantragen?" $false
+  Write-Info "Wer sie nutzen darf, steht in ccWriter.allowedRequesters. Sie wirken sofort und stehen im Aktivitaetsprotokoll."
+  $isWriter = Read-YesNo "Darf '$Name' diese Schreib-Tools nutzen?" $false
 }
 if ($isWriter -and -not $ccOn) { Write-Hint "CC-Writer ist nicht eingerichtet - Schreibrecht wird nicht eingetragen (spaeter: setup-cc-writer.ps1)."; $isWriter = $false }
 
 Write-Step 2 3 "Anlegen und aktivieren"
-$created = Add-McpUser $cfgPath $Name $AcmpUser $isApprover $Email
+$created = Add-McpUser $cfgPath $Name $AcmpUser $hasWeb
 Write-Ok "Bediener '$Name' angelegt"
 if ($isWriter) {
   $cfg = Read-AcmpConfig $cfgPath
@@ -73,7 +70,7 @@ if ($isWriter) {
   if ($cfg.kioskWriter -and $cfg.kioskWriter.PSObject.Properties["allowedRequesters"]) { $lists += "kioskWriter" }
   foreach ($sec in $lists) { Set-CfgProp $cfg.$sec "allowedRequesters" @(@($cfg.$sec.allowedRequesters | Where-Object { $_ }) + $Name | Select-Object -Unique) }
   Save-AcmpConfig $cfg $cfgPath
-  Write-Ok "'$Name' darf die Schreib-Tools beantragen ($($lists -join ', ').allowedRequesters)"
+  Write-Ok "'$Name' darf die Schreib-Tools nutzen ($($lists -join ', ').allowedRequesters)"
 }
 $r = Restart-AcmpMcp $base
 if ($r.State -ne "ok") { Write-Bad "Neustart: $($r.Message)"; exit 2 }
@@ -87,7 +84,7 @@ try {
 Write-Step 3 3 "Weitergeben"
 $publicUrl = Get-PublicUrl $cfg
 Show-AccessSummary $created $publicUrl ("$($cfg.mcp.bindAddress)" -in @("", "127.0.0.1", "localhost"))
-Write-Hint "Key und Freigabe-Link sicher weitergeben (z.B. 1Password-Freigabe), nicht per unverschluesselter Mail/Chat."
+Write-Hint "Key und Web-Token sicher weitergeben (z.B. 1Password-Freigabe), nicht per unverschluesselter Mail/Chat."
 if ($AcmpUser) {
   Write-Host ""
   Write-Info "ACMP-Identitaet verknuepfen - muss die Person selbst tun (braucht ihr ACMP-Passwort), auf diesem Server als Admin:"

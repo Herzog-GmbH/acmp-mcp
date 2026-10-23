@@ -36,13 +36,12 @@
   },
 
   "ccWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Legt Client Commands als ENTWURF direkt in der ACMP-Datenbank an: acmp_cc_create_draft, _update_draft, _restore_draft, _add_file, _remove_file und acmp_lib_install. Dazu acmp_cc_release (eigene Entwuerfe und neue Versionen aus acmp_cc_new_version freigeben, IMMER mit Freigabe-Anfrage), acmp_cc_new_version (neue Version eines vorhandenen, auch freigegebenen Commands als Entwurf, IMMER mit Freigabe-Anfrage), acmp_cc_move / acmp_cc_add_folder / acmp_cc_update_folder (Client-Command-Ordner), acmp_cc_set_parameters (Parameter eines Commands, IMMER mit Freigabe-Anfrage, Rechte: grant-cf-params.sql Abschnitt 3). Direktes Schreiben in die DB ist von Aagon nicht vorgesehen - nur mit Testordner, eigenem SQL-Login (grant-cc-writer.sql) und DB-Sicherung. Einrichten mit setup-cc-writer.ps1 (als Admin), Anleitung in docs/ACMP-VORBEREITUNG.md. Jede Schreibaktion laeuft ueber die Vier-Augen-Freigabe (approvalGate) und nur nach bestandener Kompatibilitaetspruefung (Tool acmp_cc_writer_status). Lesen (acmp_cc_decode, acmp_cc_catalog, acmp_cc_folders) braucht nur db.connectionString. moveScopeFolderIds (optional): Ordner-Tools nur innerhalb dieser Ordner samt Unterordnern. versionScopeFolderIds (optional): acmp_cc_new_version nur fuer Commands in diesen Ordnern samt Unterordnern (leer = alle ausser den Aagon-Standardordnern).",
+    "_hinweis": "Optional, standardmaessig AUS. Legt Client Commands als ENTWURF direkt in der ACMP-Datenbank an: acmp_cc_create_draft, _update_draft, _restore_draft, _add_file, _remove_file und acmp_lib_install. Dazu acmp_cc_release (eigene Entwuerfe und neue Versionen aus acmp_cc_new_version freigeben, erst dryRun, dann direkt), acmp_cc_new_version (neue Version eines vorhandenen, auch freigegebenen Commands als Entwurf, erst dryRun, dann direkt), acmp_cc_move / acmp_cc_add_folder / acmp_cc_update_folder (Client-Command-Ordner), acmp_cc_set_parameters (Parameter eines Commands, erst dryRun, dann direkt, Rechte: grant-cf-params.sql Abschnitt 3). Direktes Schreiben in die DB ist von Aagon nicht vorgesehen - nur mit Testordner, eigenem SQL-Login (grant-cc-writer.sql) und DB-Sicherung. Einrichten mit setup-cc-writer.ps1 (als Admin), Anleitung in docs/ACMP-VORBEREITUNG.md. Geschrieben wird nur nach bestandener Kompatibilitaetspruefung (Tool acmp_cc_writer_status); jede Schreibaktion steht im Aktivitaetsprotokoll, die Notbremse sperrt alle. Lesen (acmp_cc_decode, acmp_cc_catalog, acmp_cc_folders) braucht nur db.connectionString. moveScopeFolderIds (optional): Ordner-Tools nur innerhalb dieser Ordner samt Unterordnern. versionScopeFolderIds (optional): acmp_cc_new_version nur fuer Commands in diesen Ordnern samt Unterordnern (leer = alle ausser den Aagon-Standardordnern).",
     "enabled": false,
     "connectionString": "Server=HIER_SQL_INSTANZ;Database=ACMP;User ID=acmp_mcp_ccwriter;Password=HIER_KENNWORT;Application Name=ACMP-MCP-CcWriter;Connect Timeout=15",
     "templateScriptId": "HIER_GUID_VORLAGE",
     "allowedRequesters": [],
     "allowedFolderIds": [],
-    "approvalGate": true,
     "allowUntested": false,
     "fileSourceRoots": [],
     "fileRepositoryRoot": "",
@@ -56,7 +55,6 @@
     "_hinweis": "Optional, standardmaessig AUS. Kiosk-Eintraege, -Ordner, Sichtbarkeitsfilter und Icons direkt in der ACMP-Datenbank pflegen (acmp_kiosk_add_item, _set_filter, _remove_item, _update_items, _add_group, _update_group, _add_image, _set_image, _remove_image, _restore). Lesen (acmp_kiosk_tree, acmp_kiosk_images) braucht nur db.connectionString. Nutzt denselben SQL-Login wie der CC-Writer (Rechte: grant-kiosk-writer.sql) und dessen allowedRequesters, solange hier keine eigenen stehen. Geschrieben wird nur in Kiosk-Ordnern aus allowedGroupIds und in Ordnern, die der MCP selbst angelegt hat. Bild-Tools zusaetzlich: imageRepositoryDir (Ordner Images im File Repository des ACMP-Servers) und imageSourceRoots (UNC-Ordner, aus denen Bilder gelesen werden duerfen). Einrichten mit setup-kiosk-writer.ps1 (als Admin), Pruefung: acmp_kiosk_tree mit status=true.",
     "enabled": false,
     "allowedGroupIds": [],
-    "approvalGate": true,
     "allowUntested": false,
     "imageRepositoryDir": "",
     "imageSourceRoots": [],
@@ -65,56 +63,38 @@
   },
 
   "wumWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Windows-Updates der ACMP-Update-Verwaltung ablehnen und die Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore), IMMER mit Freigabe-Anfrage, hoechstens 10 Updates je Auftrag, Pflicht-Kommentar. Lesen (acmp_wum_declined) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-wum-writer.sql). rebuildFlags: nach dem Schreiben das Flag IsDeclined sofort neu aufbauen (sonst beim naechsten Lauf von ACMP). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_wum_declined mit status=true.",
+    "_hinweis": "Optional, standardmaessig AUS. Windows-Updates der ACMP-Update-Verwaltung ablehnen und die Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore), erst dryRun, dann direkt, hoechstens 10 Updates je Auftrag, Pflicht-Kommentar. Lesen (acmp_wum_declined) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-wum-writer.sql). rebuildFlags: nach dem Schreiben das Flag IsDeclined sofort neu aufbauen (sonst beim naechsten Lauf von ACMP). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_wum_declined mit status=true.",
     "enabled": false,
-    "approvalGate": true,
     "allowUntested": false,
     "rebuildFlags": true,
     "backupDir": "wum-backups"
   },
 
   "unixWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Unix Scripts (ab ACMP 6.10) anlegen, neue Version und Verteilungsring setzen (acmp_unix_script_create, _new_version, _set_ring), IMMER mit Freigabe-Anfrage. Die Skripte laufen auf den Clients als root. Einen Job starten kann der MCP nicht, das bleibt in der ACMP-Console. Lesen (acmp_unix_scripts, acmp_unix_results) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-unix-writer.sql). allowedFolderIds (optional): nur in diesen Unix-Script-Ordnern schreiben (leer = alle). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_unix_scripts mit status=true.",
+    "_hinweis": "Optional, standardmaessig AUS. Unix Scripts (ab ACMP 6.10) anlegen, neue Version und Verteilungsring setzen (acmp_unix_script_create, _new_version, _set_ring), erst dryRun, dann direkt. Die Skripte laufen auf den Clients als root. Einen Job starten kann der MCP nicht, das bleibt in der ACMP-Console. Lesen (acmp_unix_scripts, acmp_unix_results) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-unix-writer.sql). allowedFolderIds (optional): nur in diesen Unix-Script-Ordnern schreiben (leer = alle). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_unix_scripts mit status=true.",
     "enabled": false,
     "allowedFolderIds": [],
-    "approvalGate": true,
     "allowUntested": false,
     "backupDir": "unix-backups"
   },
 
   "cfWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Individuelle Felder (Client-Tabellen, Ganzzahl und Text) anlegen wie in der ACMP-Console (acmp_cf_create), IMMER mit Freigabe-Anfrage. Die DDL laeuft ueber zwei Prozeduren aus grant-cf-params.sql, der Login selbst bekommt keine DDL-Rechte. Lesen (acmp_cf_list, auch Werte je Client) braucht nur db.connectionString. Nutzt Schreib-Login, allowedRequesters und approvalGate des CC-Writers, solange hier keine eigenen stehen. Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_cf_list mit status=true.",
+    "_hinweis": "Optional, standardmaessig AUS. Individuelle Felder (Client-Tabellen, Ganzzahl und Text) anlegen wie in der ACMP-Console (acmp_cf_create), erst dryRun, dann direkt. Die DDL laeuft ueber zwei Prozeduren aus grant-cf-params.sql, der Login selbst bekommt keine DDL-Rechte. Lesen (acmp_cf_list, auch Werte je Client) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen. Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_cf_list mit status=true.",
     "enabled": false,
-    "approvalGate": true,
     "allowUntested": false,
     "backupDir": "cf-backups"
   },
 
-  "approval": {
-    "_hinweis": "Vier-Augen-Freigabe fuer Schreib-/Ausfuehr-/Loeschkommandos. Mit leerem 'approvers' startet der Server im Ersteinrichtungs-Modus: beim Start wird ein einmaliger Setup-Link ins Log geschrieben (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator/Freigeber ohne manuelles JSON-Editieren per Weboberflaeche (/setup) anlegen koennt. Weitere Bediener danach ueber /onboarding.",
-    "enabled": true,
+  "jobWriter": {
+    "_hinweis": "Optional, standardmaessig AUS. Dauerauftraege (Jobs an Containern) abschalten, einschalten, loeschen und zuruecknehmen, die Startbedingung eines Containers setzen und seine Client-Beschraenkung (acmp_job_set_enabled, acmp_job_set_condition, acmp_job_delete, acmp_job_restore, acmp_container_set_restriction), erst dryRun, dann direkt, hoechstens 10 Jobs je Auftrag, Sicherung vorher. Lesen (acmp_jobs, acmp_get_jobs) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-jobs-writer.sql, fuer die Client-Beschraenkung zusaetzlich grant-jobs-writer2.sql). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_jobs mit status=true.",
+    "enabled": false,
+    "allowUntested": false,
+    "backupDir": "jobs-backups"
+  },
+
+  "web": {
+    "_hinweis": "Weboberflaeche auf demselben Port wie der MCP: Uebersicht (/dashboard), Aktivitaetsprotokoll (/activity), Notbremse (/settings), Onboarding (/onboarding). users = Bediener mit Web-Zugang (Kurzname + Web-Token). Leer = Ersteinrichtungs-Modus: beim Start steht ein einmaliger Setup-Link im Log (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator im Browser (/setup) anlegt. Weitere Bediener ueber /onboarding. Schreib-, Ausfuehr- und Loesch-Tools wirken sofort, stehen im Aktivitaetsprotokoll (activity-JJJJ-MM.jsonl) und lassen sich mit der Notbremse sperren. Eine alte approval-Section (vor Version 2) liest der Server weiter: publicUrl, requester und approvers als Web-Zugang.",
     "publicUrl": "http://127.0.0.1:8765",
-    "pendingDir": "pending",
-    "auditFile": "approval-audit.log",
-    "requester": "",
-    "noApprovalTools": [],
-    "writeApprovers": 1,
-    "destructiveApprovers": 2,
-    "expiryMinutes": 120,
-    "blockDangerous": false,
-    "blockPatterns": [],
-    "approvers": [],
-    "notify": {
-      "_hinweis": "Optional. E-Mail-Benachrichtigung an Freigeber bei neuen Freigabe-Anfragen, ueber einen SMTP-Relay eures Vertrauens (keine Cloud-Abhaengigkeit). Ohne gueltigen smtpHost bleibt Benachrichtigung einfach aus, alles andere funktioniert weiter.",
-      "enabled": false,
-      "smtpHost": "HIER_SMTP_RELAY",
-      "smtpPort": 25,
-      "useSsl": false,
-      "username": null,
-      "password": null,
-      "from": "acmp-mcp@example.org"
-    },
-    "bypassAll": false,
-    "toolApprovalCounts": {}
+    "users": []
   }
 }

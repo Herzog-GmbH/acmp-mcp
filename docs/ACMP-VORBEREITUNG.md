@@ -30,7 +30,7 @@ Ihr braucht ein Client Command als **Vorlage**:
 Gut zu wissen:
 - Der Server übergibt jedes Skript als eine einzige Base64-Zeile, denn die ACMP-Variablenersetzung zerstört Zeilenumbrüche. Ein `param()`-Block am Skriptanfang funktioniert deshalb nicht.
 - Der Job-Status „Erfolg“ beweist **nicht**, dass das Skript lief, denn das Command wertet den Exit-Code nicht aus. Prüft im Zweifel die Wirkung. Das clientseitige Log liegt in `C:\ProgramData\acmp-mcp-client.log`.
-- `acmp_read_registry` meldet das Ergebnis per HTTP an `approval.publicUrl` + `/regresult` zurück. Diese Adresse muss **von den Clients aus** erreichbar sein (siehe `set-network-admin.ps1`).
+- `acmp_read_registry` meldet das Ergebnis per HTTP an `web.publicUrl` + `/regresult` zurück. Diese Adresse muss **von den Clients aus** erreichbar sein (siehe `set-network-admin.ps1`).
 
 ### DB-Report-Tools (Schwachstellen, Inventar, Lizenzen …)
 Für diese Tools braucht der Server Lesezugriff auf die ACMP-SQL-Datenbank:
@@ -44,9 +44,9 @@ Die Public API kann Client Commands starten, aber nicht anlegen. Der CC-Writer l
 
 So ist er abgesichert:
 - Er legt nur Entwürfe an und ändert nur Entwürfe, die er selbst angelegt hat. Vor jeder Änderung sichert er den alten Stand nach `cc-backups\`.
-- Jede Schreibaktion läuft über die Freigabe-Seite. Die Vorschau zeigt Name, Ordner, Variablen und jeden Schritt mit seinen Feldern.
-- Freigeben (`acmp_cc_release`) geht für eigene Entwürfe und für neue Versionen, die zuletzt der MCP gespeichert hat (`acmp_cc_new_version`), nicht in Aagon-Standardordnern. Bei einer Folgeversion löst er wie die Konsole die bisher freigegebene Version ab (State 8). Folgeversionen mit geänderten Dateien gibt er nicht frei. Es läuft **immer** über die Freigabe-Seite, auch bei `approval.bypassAll`. Hat sich der Entwurf seit der Anfrage geändert oder steht noch ein Platzhalter wie „HIER … EINTRAGEN“ darin, gibt er nichts frei.
-- Vorhandene, auch freigegebene oder fremde Commands ändert er nur als **neue Version** (`acmp_cc_new_version`), wie „Speichern“ in der Konsole: Die freigegebene Version läuft weiter, bis ihr die neue freigebt (`acmp_cc_release` oder Konsole). Nie in Aagon-Standardordnern, optional nur in `ccWriter.versionScopeFolderIds`. Schritt-IDs bleiben, `***` in einem Kennwortfeld übernimmt das gespeicherte Kennwort desselben Schritts. Liegt schon ein Entwurf eines anderen Bearbeiters vor, überschreibt er ihn nur mit `replaceDraft: true` (mit Sicherung). Auch dieses Tool läuft **immer** über die Freigabe-Seite, die Vorschau zeigt die Änderungen gegenüber der freigegebenen Version.
+- Jede Schreibaktion wirkt sofort und steht im Aktivitätsprotokoll. Die Vorschau (`dryRun`) zeigt vorher Name, Ordner, Variablen und jeden Schritt mit seinen Feldern.
+- Freigeben (`acmp_cc_release`) geht für eigene Entwürfe und für neue Versionen, die zuletzt der MCP gespeichert hat (`acmp_cc_new_version`), nicht in Aagon-Standardordnern. Bei einer Folgeversion löst er wie die Konsole die bisher freigegebene Version ab (State 8). Folgeversionen mit geänderten Dateien gibt er nicht frei. Hat sich der Entwurf zwischen Plan und Schreiben geändert oder steht noch ein Platzhalter wie „HIER … EINTRAGEN“ darin, gibt er nichts frei.
+- Vorhandene, auch freigegebene oder fremde Commands ändert er nur als **neue Version** (`acmp_cc_new_version`), wie „Speichern“ in der Konsole: Die freigegebene Version läuft weiter, bis ihr die neue freigebt (`acmp_cc_release` oder Konsole). Nie in Aagon-Standardordnern, optional nur in `ccWriter.versionScopeFolderIds`. Schritt-IDs bleiben, `***` in einem Kennwortfeld übernimmt das gespeicherte Kennwort desselben Schritts. Liegt schon ein Entwurf eines anderen Bearbeiters vor, überschreibt er ihn nur mit `replaceDraft: true` (mit Sicherung). Die Vorschau (`dryRun`) zeigt die Änderungen gegenüber der freigegebenen Version.
 - Verschieben (`acmp_cc_move`) darf er auch fremde Commands, aber nur deren Ordner ändern (wie in der Konsole). Mit `ccWriter.moveScopeFolderIds` begrenzt ihr die Ordner-Tools auf bestimmte Teilbäume.
 - Er schreibt mit einem eigenen SQL-Login, der nur die nötigen Rechte hat und in `SYS_SCRIPTS` nichts löschen darf.
 - Vor dem Schreiben läuft eine **Kompatibilitätsprüfung**: ACMP-Version, Tabellen und Spalten, Trigger, Rechte des Logins, Vorlage, Ordner, File Repository und ein Rundlauf an euren 50 neuesten Commands (auspacken, wieder einpacken, muss bytegleich sein). Fällt eine Prüfung durch, schreibt er nichts. Nach einem ACMP-Update kann das passieren, bis die neue Version getestet ist.
@@ -60,7 +60,7 @@ Einrichten:
 6. **Optional, für angehängte Dateien:** eine oder mehrere UNC-Freigaben mit Installationsdateien, auf die das Computerkonto des ACMP-Servers lesen darf. Dazu der Pfad des File Repository auf dem ACMP-Server, Unterordner `ClientCommands\Projects`. Darin legt ACMP je Command einen Ordner mit dessen GUID an.
 7. **Einrichten** als Administrator: `.\setup-cc-writer.ps1` im Installationsordner, oder `install.ps1` → Schritt „Optionale Funktionen“. Das Skript fragt Vorlage, Testordner, Bediener und das Kennwort (verdeckt) ab. Es prüft Anmeldung, Rechte, Vorlage und Ordner, bevor es `config.local.json` ändert.
 8. **Prüfen:** Im MCP-Client `acmp_cc_writer_status` aufrufen. Dort muss „bestanden“ stehen. `ordnerTools` und `freigabeTool` zeigen, ob die optionalen Tools frei sind.
-9. **Weitere Bediener freischalten:** Der SQL-Login gehört dem Server, nicht den Bedienern. Ob jemand die Schreib-Tools beantragen darf, steht in `ccWriter.allowedRequesters` und wird beim Start gelesen. `add-user.ps1` fragt danach. Für Bediener, die ihr über `/onboarding` anlegt: `.\setup-cc-writer.ps1 -AddRequester <kurzname>` (startet den Dienst neu). Die ACMP-Rechte der Person prüft ACMP bei diesen Tools nicht, weil sie an der Public API vorbeigehen. Wer schreiben darf, entscheidet ihr also hier, zustimmen muss trotzdem ein Freigeber.
+9. **Weitere Bediener freischalten:** Der SQL-Login gehört dem Server, nicht den Bedienern. Ob jemand die Schreib-Tools nutzen darf, steht in `ccWriter.allowedRequesters` und wird beim Start gelesen. `add-user.ps1` fragt danach. Für Bediener, die ihr über `/onboarding` anlegt: `.\setup-cc-writer.ps1 -AddRequester <kurzname>` (startet den Dienst neu). Die ACMP-Rechte der Person prüft ACMP bei diesen Tools nicht, weil sie an der Public API vorbeigehen. Wer schreiben darf, entscheidet ihr also hier.
 
 Die GUIDs von Vorlage und Ordner liefert euch die KI, sobald die DB-Report-Tools laufen: `acmp_db_script_rows` mit `table: SYS_SCRIPTS`, `column: DESCRIPTION`, `value: MCP Vorlage`. `SCRIPTID` ist die Vorlage, `FOLDERID` der Ordner.
 
@@ -81,10 +81,10 @@ Fällt die Prüfung durch, nennt `acmp_cc_writer_status` den Grund:
 | File Repository nicht gefunden | nur die Datei-Tools sind gesperrt. `ccWriter.fileRepositoryRoot` korrigieren |
 
 #### Parameter eines Client Commands
-`acmp_cc_parameters` zeigt die Parameter eines Commands (Konsole: Eigenschaften → Client Command spezifisch → Parameter), `acmp_cc_set_parameters` setzt sie wie der Dialog der Konsole: Text, Auswahl oder Kontrollkästchen je Projektvariable, mit Beschriftung DE/EN und Standardwert. Die Liste ersetzt alle bisherigen Parameter, sie wirken sofort für neue Jobs und im Kiosk, ohne neue Version des Commands. Setzt ein Schritt „Projektvariable setzen“ dieselbe Variable, warnt die Vorschau, denn er überschreibt den Parameterwert wieder. Das Tool gehört zum CC-Writer, läuft **immer** über die Freigabe-Seite und braucht zusätzlich `grant-cf-params.sql` Abschnitt 3 (nur die drei Tabellen `SYS_Jobs_Parameters_*`). Prüfen mit `acmp_cc_parameters` und `status: true`.
+`acmp_cc_parameters` zeigt die Parameter eines Commands (Konsole: Eigenschaften → Client Command spezifisch → Parameter), `acmp_cc_set_parameters` setzt sie wie der Dialog der Konsole: Text, Auswahl oder Kontrollkästchen je Projektvariable, mit Beschriftung DE/EN und Standardwert. Die Liste ersetzt alle bisherigen Parameter, sie wirken sofort für neue Jobs und im Kiosk, ohne neue Version des Commands. Setzt ein Schritt „Projektvariable setzen“ dieselbe Variable, warnt die Vorschau, denn er überschreibt den Parameterwert wieder. Das Tool gehört zum CC-Writer, zeigt mit `dryRun` vorher eine Vorschau und braucht zusätzlich `grant-cf-params.sql` Abschnitt 3 (nur die drei Tabellen `SYS_Jobs_Parameters_*`). Prüfen mit `acmp_cc_parameters` und `status: true`.
 
 #### Vorlagen aus der ACMP CTL
-`acmp_lib_install` installiert Vorlagen aus der ACMP CTL (Community Template Library) als Entwurf, über den CC-Writer und dieselbe Freigabe. Mit `dryRun: true` zeigt es ohne Writer, was angelegt würde. Quellen stehen in `ctl.sources`. Standard ist erst der Ordner `ctl` im Installationsordner (`templates\<id>\template.json`), dann das Repo [`Herzog-GmbH/acmp-ctl`](https://github.com/Herzog-GmbH/acmp-ctl). Alle Vorlagen samt Schritten und Skripten könnt ihr vorher auf https://herzog-gmbh.github.io/acmp-ctl/ lesen. Eigene Vorlagen legt ihr im Ordner `ctl` ab.
+`acmp_lib_install` installiert Vorlagen aus der ACMP CTL (Community Template Library) als Entwurf, über den CC-Writer. Mit `dryRun: true` zeigt es ohne Writer, was angelegt würde. Quellen stehen in `ctl.sources`. Standard ist erst der Ordner `ctl` im Installationsordner (`templates\<id>\template.json`), dann das Repo [`Herzog-GmbH/acmp-ctl`](https://github.com/Herzog-GmbH/acmp-ctl). Alle Vorlagen samt Schritten und Skripten könnt ihr vorher auf https://herzog-gmbh.github.io/acmp-ctl/ lesen. Eigene Vorlagen legt ihr im Ordner `ctl` ab.
 
 ### Kiosk pflegen (Kiosk-Writer)
 Auch den Kiosk kann die Public API nicht pflegen. Der Kiosk-Writer legt deshalb Einträge, Ordner, Sichtbarkeitsfilter und Icons direkt in der ACMP-Datenbank an. Lesen (`acmp_kiosk_tree`, `acmp_kiosk_images`) geht schon mit den DB-Report-Tools.
@@ -93,7 +93,7 @@ Auch den Kiosk kann die Public API nicht pflegen. Der Kiosk-Writer legt deshalb 
 
 So ist er abgesichert:
 - Er schreibt nur in Kiosk-Ordner aus `kioskWriter.allowedGroupIds` und in Ordner, die er selbst angelegt hat. Kiosk-Ordner löschen darf er nicht.
-- Jede Änderung läuft über die Freigabe-Seite. Die Vorschau zeigt Name, Ordner, Filter im Klartext und das Icon. Vorher sichert er den alten Stand nach `kiosk-backups\`, `acmp_kiosk_restore` holt ihn zurück.
+- Jede Änderung wirkt sofort und steht im Aktivitätsprotokoll. Die Vorschau (`dryRun`) zeigt vorher Name, Ordner, Filter im Klartext und das Icon. Vorher sichert er den alten Stand nach `kiosk-backups\`, `acmp_kiosk_restore` holt ihn zurück.
 - Eigene Icons entfernt er nur, wenn er sie selbst hochgeladen hat und sie nirgends benutzt werden.
 - Vor dem Schreiben prüft er ACMP-Version, Tabellen, Trigger und Rechte und baut eure vorhandenen Sichtbarkeitsfilter zur Probe nach. Weicht einer ab, schreibt er nichts. Filterformen, die er nicht kennt, meldet er als Hinweis und legt sie selbst nicht an.
 
@@ -110,22 +110,23 @@ Sichtbarkeitsfilter nach AD-Gruppe, OU oder Benutzer löst der Server im Active 
 
 Ausschalten: `.\setup-kiosk-writer.ps1 -Disable`.
 
-### Weitere Schreib-Tools (Windows-Updates, Unix Scripts, individuelle Felder)
-Drei weitere Funktionen schreiben direkt in die ACMP-Datenbank, weil die Public API sie nicht kennt. Lesen geht bei allen dreien schon mit den DB-Report-Tools: `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_unix_results`, `acmp_cf_list`.
+### Weitere Schreib-Tools (Windows-Updates, Unix Scripts, individuelle Felder, Jobs)
+Vier weitere Funktionen schreiben direkt in die ACMP-Datenbank, weil die Public API sie nicht kennt. Lesen geht bei allen schon mit den DB-Report-Tools: `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_unix_results`, `acmp_cf_list`, `acmp_jobs`, `acmp_get_jobs`.
 
 | Funktion | Tools | Rechte | Config |
 |---|---|---|---|
 | Windows-Updates ablehnen | `acmp_wum_decline`, `acmp_wum_restore` | `grant-wum-writer.sql` | `wumWriter` |
 | Unix Scripts schreiben (ab ACMP 6.10) | `acmp_unix_script_create`, `_new_version`, `_set_ring` | `grant-unix-writer.sql` | `unixWriter` |
 | Individuelle Felder anlegen | `acmp_cf_create` | `grant-cf-params.sql` | `cfWriter` |
+| Jobs schalten, löschen, Startbedingung, Client-Beschränkung | `acmp_job_set_enabled`, `_set_condition`, `_delete`, `_restore`, `acmp_container_set_restriction` | `grant-jobs-writer.sql`, für die Client-Beschränkung zusätzlich `grant-jobs-writer2.sql` | `jobWriter` |
 
-> **Achtung:** Wie beim CC-Writer ist das von Aagon nicht vorgesehen. Sichert vorher die Datenbank. Alle drei sind standardmäßig aus.
+> **Achtung:** Wie beim CC-Writer ist das von Aagon nicht vorgesehen. Sichert vorher die Datenbank. Alle vier sind standardmäßig aus.
 
-Für alle drei gilt:
-- Sie nutzen den SQL-Login, die Bediener-Liste (`ccWriter.allowedRequesters`) und die Freigabe-Einstellung des CC-Writers, solange im eigenen Abschnitt nichts anderes steht.
-- Jede Schreibaktion läuft **immer** über die Freigabe-Seite, auch bei `approval.bypassAll`. Die Anfrage friert den Stand ein. Hat sich bis zur Zustimmung etwas geändert, schreibt der Server nichts.
+Für alle vier gilt:
+- Sie nutzen den SQL-Login und die Bediener-Liste (`ccWriter.allowedRequesters`) des CC-Writers, solange im eigenen Abschnitt nichts anderes steht.
+- Jede Schreibaktion zeigt mit `dryRun` vorher eine Vorschau, wirkt dann sofort und steht im Aktivitätsprotokoll. Der Plan hält den Stand fest; hat sich bis zum Schreiben etwas geändert, schreibt der Server nichts.
 - Vor dem Schreiben prüft der Server ACMP-Version, Tabellen, Trigger und Rechte. Getestet ist ACMP 6.10. Bei Abweichungen sperrt die Vorprüfung, `allowUntested: true` nur bewusst setzen.
-- Vorher wird gesichert bzw. protokolliert (`wum-backups\`, `unix-backups\`, `cf-backups\`).
+- Vorher wird gesichert bzw. protokolliert (`wum-backups\`, `unix-backups\`, `cf-backups\`, `jobs-backups\`).
 
 **Windows-Updates ablehnen.** Der Server lehnt Updates über die ACMP-eigene Prozedur `ap_Wum_DeclineUpdates` ab, wie „Ablehnen“ in der Konsole, und baut danach die Flags neu auf. Abgelehnte Updates bekommen die Clients nicht mehr angeboten, bereits installierte bleiben. Höchstens 10 Updates je Auftrag, nur per Update-Id, mit Pflicht-Kommentar. Abgelöste, abgelaufene und widerrufene Updates lehnt er nicht ab. `acmp_wum_restore` hebt eine Ablehnung wieder auf. Die nächtlichen Ablehnungen des ACMP-Bereinigungsjobs („Autodeclined by Cleanupjob …“) blendet `acmp_wum_declined` standardmäßig aus (`includeAuto: true` zeigt sie).
 
@@ -136,14 +137,23 @@ Für alle drei gilt:
 
 **Individuelle Felder.** `acmp_cf_create` legt Felder für Clients an wie die Konsole: optional eine neue Tabelle, je Feld Ganzzahl oder Text, höchstens 10 Felder je Auftrag. Andere Eingabemethoden, Mehrfachtabellen und Löschen bleiben Sache der Konsole. Der Schreib-Login bekommt dafür **keine** DDL-Rechte: Tabelle und Spalte legen die zwei Prozeduren `mcp_cf_create_table` und `mcp_cf_add_column` aus `grant-cf-params.sql` an (`EXECUTE AS OWNER`), die nur genau das Muster des ACMP-Servers bauen. Sie vergeben auf neue Tabellen die Rechte an die ACMP-Datenbankbenutzer `RLS_ACMPUser`, `AcmpUser_ReadOnly` und `AcmpUser_LowPrivilege`. Fehlt einer davon, passt das Muster nicht zu eurer Installation, und ihr richtet das Tool besser nicht ein. Ob der ACMP-Server ein neu angelegtes Feld ohne Neustart kennt, zeigt der erste Lauf eines Commands mit „Wert auf Server speichern“ (`acmp_cf_list` mit `values: true`).
 
+**Jobs.** `acmp_jobs` listet die Daueraufträge (Jobs an Containern) mit Ziel-Container, Startbedingung im Klartext, Läufen und Fehlern der letzten 7 und 30 Tage und Hinweisen: abgeschaltet, Client Command gelöscht, Container leer, stündlich oder bei jedem Start ohne „einmalig“, dieselbe Aufgabe an mehreren Containern, Linux-Clients im Windows-Container. Die Job-Aktion bleibt ausgeblendet, weil sie Kennwörter enthalten kann. Der Job-Writer arbeitet wie die Konsole:
+- `acmp_job_set_enabled` schaltet Daueraufträge ab und wieder ein. Einschalten stellt die alte Startbedingung exakt wieder her.
+- `acmp_job_delete` löscht die Verknüpfung zur Job-Vorlage, den Job selbst löscht der ACMP-Trigger `TG_Delete_SYS_Templates_Jobs`. Job-Historie und Job-Vorlage bleiben.
+- `acmp_job_set_condition` setzt die Startbedingung eines Containers: einmalig, beim Agentenstart, täglich bzw. alle n Tage, stündlich bzw. alle n Stunden oder im Wartungsfenster, optional ohne Rücksicht auf Wartungsfenster. Die Konsole führt die Startbedingung je Container, deshalb gilt sie für alle seine Daueraufträge, und abgeschaltete Jobs werden damit wieder aktiv. Wochentage, Uhrzeiten und Netzwerk-Bedingungen bleiben Sache der Konsole. **Vorsicht:** `condition: once` (sofort einmalig) startet sofort auf allen Mitgliedern, die online sind.
+- `acmp_container_set_restriction` setzt nur die Client-Beschränkung eines Containers (nur Clients seiner Betriebssystemfamilie oder alle). Die Vorschau nennt die Mitglieder, die dann herausfallen; wirksam wird das bei der nächsten Container-Neuberechnung des ACMP-Servers.
+- `acmp_job_restore` nimmt jede dieser Änderungen aus der Sicherung zurück, solange seitdem nichts geändert wurde.
+
+Höchstens 10 Jobs je Auftrag, nur Daueraufträge (keine einmaligen Jobs, keine Agentenplaner-Scanner; die zeigt `acmp_agent_tasks`). In der Konsole bleiben: Jobs anlegen bzw. Commands an Container hängen, die Betriebssystemfamilie eines Containers, Agentenplaner-Aufgaben, Berichte und Profile löschen, Jobs mit mehreren Vorlagen löschen.
+
 Einrichten:
 1. **CC-Writer** einrichten (siehe oben).
 2. **Datenbank sichern.**
-3. **Rechte:** je Funktion das SQL als SQL-Admin ausführen: `grant-wum-writer.sql`, `grant-unix-writer.sql` bzw. `grant-cf-params.sql`. Abschnitt 1 zeigt jeweils vorher Trigger und Benutzer, die Kontrolle am Ende die wirksamen Rechte.
-4. **Einrichten** als Administrator: `.\setup-extra-writers.ps1` im Installationsordner, oder `install.ps1` → Schritt „Optionale Funktionen“. Das Skript fragt je Funktion nach, prüft die Rechte des Schreib-Logins und schaltet nur ein, was vollständig ist. Mit `-Features wum,unix,cf` ohne Rückfrage, Unix-Ordner mit `-UnixFolderIds`.
-5. **Prüfen:** im MCP-Client `acmp_wum_declined`, `acmp_unix_scripts` bzw. `acmp_cf_list` jeweils mit `status: true`. Die Vorprüfung muss bestanden sein.
+3. **Rechte:** je Funktion das SQL als SQL-Admin ausführen: `grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql` bzw. `grant-jobs-writer.sql` (für die Client-Beschränkung zusätzlich `grant-jobs-writer2.sql`). Abschnitt 1 zeigt jeweils vorher Trigger und Benutzer, die Kontrolle am Ende die wirksamen Rechte.
+4. **Einrichten** als Administrator: `.\setup-extra-writers.ps1` im Installationsordner, oder `install.ps1` → Schritt „Optionale Funktionen“. Das Skript fragt je Funktion nach, prüft die Rechte des Schreib-Logins und schaltet nur ein, was vollständig ist. Mit `-Features wum,unix,cf,jobs` ohne Rückfrage, Unix-Ordner mit `-UnixFolderIds`.
+5. **Prüfen:** im MCP-Client `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_cf_list` bzw. `acmp_jobs` jeweils mit `status: true`. Die Vorprüfung muss bestanden sein.
 
-Ausschalten: `.\setup-extra-writers.ps1 -Disable` (alle drei) oder mit `-Features` nur einzelne.
+Ausschalten: `.\setup-extra-writers.ps1 -Disable` (alle) oder mit `-Features` nur einzelne.
 
-### E-Mail bei neuen Freigabe-Anfragen
-Unter `approval.notify` einen SMTP-Relay eintragen. Ohne diesen Eintrag funktioniert alles andere genauso.
+### Aktivitätsprotokoll und Notbremse
+Braucht keine Einrichtung. Das Protokoll liegt als `activity-JJJJ-MM.jsonl` im Installationsordner, die Notbremse als `notbremse.json`; beides seht ihr auf der Weboberfläche unter `/activity` und `/settings`. Die E-Mail-Benachrichtigung aus Version 1 (`approval.notify`) gibt es nicht mehr.

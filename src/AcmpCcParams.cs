@@ -13,8 +13,8 @@
 //  Der Server liest die Parameter bei jeder Job-Auswertung frisch (kein Zwischenspeicher). Ein Parameterwert ueberschreibt beim Jobstart den Startwert
 //  der Projektvariable - ein Schritt "Projektvariable setzen" im Skript ueberschreibt ihn danach wieder (die Vorschau warnt davor).
 // Regeln: die Liste ersetzt alle Parameter des Commands (wie der Dialog der Console; Entfernen zeigt die Vorschau), nur schreibbare Projektvariablen
-// der neuesten Version, je Variable ein Parameter, nicht in Aagon-Standardordnern (wie acmp_cc_new_version), immer ueber die Vier-Augen-Freigabe,
-// Plan mit dem Stand der Parameter (SHA-256) eingefroren, Sicherung vorher (cc-backups), eine Transaktion, Kontrolle in derselben Transaktion.
+// der neuesten Version, je Variable ein Parameter, nicht in Aagon-Standardordnern (wie acmp_cc_new_version), erst dryRun (Vorschau),
+// Plan mit dem Stand der Parameter (SHA-256), Sicherung vorher (cc-backups), eine Transaktion, Kontrolle in derselben Transaktion.
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -549,19 +549,19 @@ partial class AcmpCcWriter
         }
     }
 
-    // ================= Ausfuehren (nur mit eingefrorenem Plan aus der Freigabe-Anfrage) =================
+    // ================= Ausfuehren (nur mit dem Plan, den der Server direkt vorher erstellt hat) =================
 
     public JObject RunSetParameters(JObject a, string requester)
     {
         CheckParamWrite(requester);
         JObject p = a["_plan"] as JObject;
-        if (p == null || (string)p["action"] != "setparams") throw new Exception("acmp_cc_set_parameters laeuft nur ueber eine Freigabe-Anfrage mit eingefrorenem Plan - nichts geschrieben.");
+        if (p == null || (string)p["action"] != "setparams") throw new Exception("acmp_cc_set_parameters laeuft nur mit einem vom Server erstellten Plan - nichts geschrieben.");
         string id = (string)p["scriptId"], label = "\"" + p["name"] + "\" " + id;
         List<CcParam> after = p["params"].ToObject<List<CcParam>>();
         var removedIds = new List<string>(); foreach (JToken t in (JArray)p["removedIds"]) removedIds.Add((string)t);
         if (Sha256Text(ParamKey(after)) != (string)p["afterSha256"]) throw new Exception("Plan unvollstaendig (Pruefsumme) - nichts geschrieben.");
         foreach (CcParam x in after)   // Anfragen von vor der Reparatur (22.10.2026) trugen zufaellige Ids
-            if (!ParamIdOk(id, x)) throw new Exception(label + ": Parameter " + x.Name + " hat im Plan nicht die Console-Id (Anfrage von vor der Reparatur?) - nichts geschrieben, bitte neu beantragen.");
+            if (!ParamIdOk(id, x)) throw new Exception(label + ": Parameter " + x.Name + " hat im Plan nicht die Console-Id (Plan von vor der Reparatur?) - nichts geschrieben, bitte erneut aufrufen.");
         string backup;
         Guid sid = new Guid(id.Trim('{', '}'));
         lock (_lock)
@@ -577,10 +577,10 @@ partial class AcmpCcWriter
                 List<string> writable = WritableVars(rc, id, rows[0].Version);
                 foreach (CcParam x in after)
                     if (!writable.Exists(w => string.Equals(w, x.Name, StringComparison.OrdinalIgnoreCase)))
-                        throw new Exception(label + ": Projektvariable " + x.Name + " ist in der neuesten Version v" + rows[0].Version + " nicht (mehr) schreibbar vorhanden - nichts geschrieben, bitte neu beantragen.");
+                        throw new Exception(label + ": Projektvariable " + x.Name + " ist in der neuesten Version v" + rows[0].Version + " nicht (mehr) schreibbar vorhanden - nichts geschrieben, bitte erneut aufrufen.");
             }
             List<CcParam> now = LoadParams(c, null, id);
-            if (Sha256Text(ParamKey(now)) != (string)p["beforeSha256"]) throw new Exception(label + ": Parameter wurden seit der Anfrage geaendert - nichts geschrieben, bitte neu beantragen.");
+            if (Sha256Text(ParamKey(now)) != (string)p["beforeSha256"]) throw new Exception(label + ": Parameter wurden seit der Planung geaendert - nichts geschrieben, bitte erneut aufrufen.");
             var b = new JObject();
             b["kind"] = "params"; b["batchId"] = p["batchId"]; b["zeit"] = DateTime.Now.ToString("s"); b["von"] = requester; b["scriptId"] = id; b["name"] = p["name"];
             b["grund"] = "vor acmp_cc_set_parameters (Stand vorher; zurueck: acmp_cc_set_parameters mit dieser Liste)";

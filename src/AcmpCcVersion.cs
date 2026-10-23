@@ -10,8 +10,8 @@
 //  - Liegt schon ein Entwurf vor, oeffnet und speichert die Console diesen Entwurf (keine weitere Version).
 // Regeln: nicht in Aagon-Standardordnern (StrucLevel 0), optional nur in ccWriter.versionScopeFolderIds; eigene MCP-Entwuerfe weiter mit
 // acmp_cc_update_draft; einen fremden Entwurf nur mit replaceDraft=true ueberschreiben (Sicherung, zurueck mit acmp_cc_restore_draft);
-// Schritt-IDs bleiben, '***' in Kennwortfeldern uebernimmt das gespeicherte Kennwort desselben Schritts; immer ueber die
-// Vier-Augen-Freigabe, Plan mit SHA-256 der Basis und des neuen Inhalts eingefroren. Dateien aendert das Tool nicht.
+// Schritt-IDs bleiben, '***' in Kennwortfeldern uebernimmt das gespeicherte Kennwort desselben Schritts; erst dryRun
+// (Vorschau), Plan mit SHA-256 der Basis und des neuen Inhalts. Dateien aendert das Tool nicht.
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -221,7 +221,7 @@ partial class AcmpCcWriter
         return d;
     }
 
-    // null und "" gelten als gleich (JSON-Rundlauf der Freigabe-Anfrage)
+    // null und "" gelten als gleich (JSON-Rundlauf des Plans)
     static bool SameStr(string now, JToken planned, bool ignoreCase)
     {
         string b = planned != null && planned.Type != JTokenType.Null ? (string)planned : null;
@@ -374,7 +374,7 @@ partial class AcmpCcWriter
         return client;
     }
 
-    // ================= Planen (dryRun und Freigabe-Anfrage) =================
+    // ================= Planen (dryRun und Ausfuehrung) =================
 
     public JObject PlanNewVersion(JObject a, bool withContent)
     {
@@ -485,21 +485,21 @@ partial class AcmpCcWriter
                     head.Add("   " + (string)t);
                 }
             }
-            else head.Add("Inhalt: " + content.Count + " Zeilen - mit details=true bzw. auf der Freigabeseite.");
+            else head.Add("Inhalt: " + content.Count + " Zeilen - mit details=true.");
             head.Add("Bei der Ausfuehrung wird verglichen: Versionen, State, SHA-256 von Client- und Console-Skript der Basis, Name, Ordner, letzter Bearbeiter und der neu gebaute Inhalt. Weicht etwas ab, wird NICHTS geschrieben.");
             p["vorschau"] = new JArray(head.ToArray());
             return p;
         }
     }
 
-    // ================= Ausfuehren (nur mit eingefrorenem Plan aus der Freigabe-Anfrage) =================
+    // ================= Ausfuehren (nur mit dem Plan, den der Server direkt vorher erstellt hat) =================
 
     public JObject RunNewVersion(JObject a, string requester)
     {
         CheckWrite(requester, false);
         JObject p = a["_plan"] as JObject;
         if (p == null || (string)p["action"] != "newversion")
-            throw new Exception("acmp_cc_new_version laeuft nur ueber eine Freigabe-Anfrage mit eingefrorenem Plan - nichts geschrieben.");
+            throw new Exception("acmp_cc_new_version laeuft nur mit einem vom Server erstellten Plan - nichts geschrieben.");
         string id = (string)p["scriptId"], mode = (string)p["mode"], label = "\"" + p["name"] + "\" " + id;
         int baseVer = (int)p["baseVersion"], newVer = (int)p["newVersion"];
         if (mode != "insert" && mode != "replace") throw new Exception("Plan ohne gueltigen Modus - nichts geschrieben.");
@@ -511,13 +511,13 @@ partial class AcmpCcWriter
             // 1) Jetzigen Stand gegen den Plan pruefen, Inhalt neu bauen und mit der Anfrage vergleichen
             List<CcVersionRow> rows = LoadVersions(c, null, id);
             List<string> diff = VersionDiff(p, rows);
-            if (diff.Count > 0) throw new Exception("Nichts geschrieben - " + label + " wurde seit der Anfrage geaendert (" + string.Join(", ", diff.ToArray()) + "). Bitte neu beantragen.");
+            if (diff.Count > 0) throw new Exception("Nichts geschrieben - " + label + " wurde seit der Planung geaendert (" + string.Join(", ", diff.ToArray()) + "). Bitte erneut aufrufen.");
             CheckVersionFolder(LoadFolders(c), rows[0].FolderId, _versionScope, label);
             CcVersionRow top = rows[0], released = rows.Find(x => x.State == 7);
             byte[] cb, ob; List<string> notes; int secrets;
             CcScript client = BuildVersion((JArray)p["steps"], (JArray)p["variables"], top, released, out cb, out ob, out notes, out secrets);
             if (Sha256Hex(cb) != (string)p["newClientSha256"] || Sha256Hex(ob) != (string)p["newConsoleSha256"])
-                throw new Exception("Nichts geschrieben - der neu gebaute Inhalt weicht von der Anfrage ab (SHA-256). Bitte neu beantragen.");
+                throw new Exception("Nichts geschrieben - der neu gebaute Inhalt weicht vom Plan ab (SHA-256). Bitte erneut aufrufen.");
             varCount = client.Vars.Count;
 
             // 2) Sicherung: beim Ueberschreiben der ganze Entwurf (zurueck mit acmp_cc_restore_draft), sonst nur der Ausgangsstand

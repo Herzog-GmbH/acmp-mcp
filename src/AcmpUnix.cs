@@ -1,6 +1,6 @@
 // AcmpUnix: Unix Scripts (ACMP 6.10, Desktop Automation -> Unix Scripts) lesen und schreiben.
 //   acmp_unix_scripts (lesen: Skripte, Versionen, Ring, Inhalt), acmp_unix_results (lesen: Job-Ergebnisse je Client mit StdOut/StdErr),
-//   acmp_unix_script_create, acmp_unix_script_new_version, acmp_unix_script_set_ring (schreiben, immer ueber die Vier-Augen-Freigabe).
+//   acmp_unix_script_create, acmp_unix_script_new_version, acmp_unix_script_set_ring (schreiben, erst dryRun, dann direkt).
 // Grundlage: Beobachtung der Console 6.10.4 am 22.10.2026 (Rechte: grant-unix-writer.sql):
 //  - Skript   = SYS_UnixClient_Scripts (Id, Name, FolderId, Description, Interpreter 0 Bash / 1 Zsh, StoreLog), Rechte wie der Ordner
 //               (SYS_Folders FolderType 68, SYS_Folders_AclEntries_* -> SYS_AccessControl_AclEntries_*, ObjectID = Skript-Id).
@@ -16,8 +16,8 @@
 //  - Keine Trigger auf den drei Tabellen; Fremdschluessel loeschen kaskadierend (Ordner -> Skripte -> Versionen, Ring -> DeclineInfo).
 //    Standardwerte der Tabellen weichen von dem ab, was die Console schreibt (TransitionMode 0, TestRing 255, ItemKind -1) - das Tool
 //    setzt deshalb jede Spalte ausdruecklich.
-// Regeln: nur ueber die Vier-Augen-Freigabe (auch bei bypassAll, AlwaysGatedTools); Plan mit Inhalt (SHA-256) und Stand eingefroren - hat
-// sich bis zur Zustimmung etwas geaendert, wird nichts geschrieben; eine Transaktion je Auftrag; Protokoll/Sicherung in unix-backups\.
+// Regeln: erst dryRun (Vorschau); Plan mit Inhalt (SHA-256) und Stand - hat
+// sich bis zum Schreiben etwas geaendert, wird nichts geschrieben; eine Transaktion je Auftrag; Protokoll/Sicherung in unix-backups\.
 // Der MCP aendert keine vorhandenen Versionen (Inhalt) und loescht nichts - Aendern = neue Version, Zurueck = Ring wieder setzen.
 using System;
 using System.Collections.Generic;
@@ -58,7 +58,6 @@ class AcmpUnix
 
     public bool ConfigOk { get; private set; }
     public string DisabledReason { get; private set; }
-    public bool ApprovalGate { get; private set; }
 
     public static bool IsWriteTool(string name)
     {
@@ -70,8 +69,6 @@ class AcmpUnix
         _readCs = readCs; _log = log; _acmpVersion = acmpVersion;
         string bd = cfg != null && cfg["backupDir"] != null ? (string)cfg["backupDir"] : "unix-backups";
         _backupDir = Path.IsPathRooted(bd) ? bd : Path.Combine(cfgDir, bd);
-        JToken gate = cfg != null && cfg["approvalGate"] != null ? cfg["approvalGate"] : (ccCfg != null ? ccCfg["approvalGate"] : null);
-        ApprovalGate = gate == null || (bool)gate;
         _allowUntested = cfg != null && cfg["allowUntested"] != null && (bool)cfg["allowUntested"];
         JArray af = cfg != null ? cfg["allowedFolderIds"] as JArray : null;
         if (af != null) foreach (JToken t in af) { string g = GuidBraces((string)t); if (g != null) _allowedFolders.Add(g); }
@@ -376,7 +373,6 @@ class AcmpUnix
         if (!ConfigOk) { o["status"] = "aus"; o["reason"] = DisabledReason; return o; }
         JObject pf = Preflight(refresh);
         o["status"] = (bool)pf["ok"] ? "aktiv" : "gesperrt";
-        o["approvalGate"] = ApprovalGate;
         o["allowedRequesters"] = new JArray(new List<string>(_allowedReq).ToArray());
         if (_allowedFolders.Count > 0) o["allowedFolderIds"] = new JArray(new List<string>(_allowedFolders).ToArray());
         o["createTool"] = pf["createTool"]; o["versionTool"] = pf["versionTool"]; o["ringTool"] = pf["ringTool"];
@@ -388,7 +384,6 @@ class AcmpUnix
     public void CheckWrite(string requester, string tool)
     {
         if (!ConfigOk) throw new Exception("Unix-Script-Schreiben ist ausgeschaltet: " + DisabledReason);
-        if (!ApprovalGate) throw new Exception(tool + " laeuft nur ueber die Vier-Augen-Freigabe (unixWriter.approvalGate bzw. ccWriter.approvalGate ist aus) - nichts geschrieben.");
         if (requester == null || !_allowedReq.Contains(requester)) throw new Exception("Antragsteller '" + requester + "' darf keine Unix Scripts schreiben (unixWriter.allowedRequesters bzw. ccWriter.allowedRequesters).");
         JObject pf = Preflight(false);
         if (pf == null || !(bool)pf["ok"]) throw new Exception("Unix-Script-Schreiben gesperrt - Vorpruefung nicht bestanden: " + (pf != null ? (string)pf["summary"] : "keine Pruefung") + " (Details: acmp_unix_scripts mit status=true). Nichts geschrieben.");
@@ -843,7 +838,7 @@ class AcmpUnix
     {
         CheckWrite(requester, tool);
         JObject p = a["_plan"] as JObject;
-        if (p == null) throw new Exception(tool + " schreibt nur mit dem eingefrorenen Plan aus der Vier-Augen-Freigabe - nichts geschrieben.");
+        if (p == null) throw new Exception(tool + " schreibt nur mit einem vom Server erstellten Plan - nichts geschrieben.");
         string want = tool == "acmp_unix_script_create" ? "create" : tool == "acmp_unix_script_new_version" ? "new_version" : "set_ring";
         if ((string)p["action"] != want) throw new Exception("Plan passt nicht zum Tool (" + p["action"] + " / " + tool + ") - nichts geschrieben.");
         if (p["content"] != null && Sha256((string)p["content"]) != (string)p["sha256"]) throw new Exception("Inhalt des Plans passt nicht zur Pruefsumme - nichts geschrieben.");
@@ -888,7 +883,7 @@ class AcmpUnix
             wc.Open();
             using (SqlTransaction tx = wc.BeginTransaction())
             {
-                if (NameTaken(wc, tx, name, folder)) throw new Exception("Im Ordner gibt es inzwischen ein Unix Script '" + name + "' - nichts geschrieben, bitte neu beantragen.");
+                if (NameTaken(wc, tx, name, folder)) throw new Exception("Im Ordner gibt es inzwischen ein Unix Script '" + name + "' - nichts geschrieben, bitte erneut aufrufen.");
                 var chk = wc.CreateCommand(); chk.Transaction = tx;
                 chk.CommandText = "SELECT COUNT(*) FROM SYS_UnixClient_Scripts WHERE Id = @s"; chk.Parameters.AddWithValue("@s", G(sid));
                 if (Convert.ToInt32(chk.ExecuteScalar()) > 0) throw new Exception("Skript " + sid + " gibt es schon (Plan schon ausgefuehrt?) - nichts geschrieben.");
@@ -936,14 +931,14 @@ class AcmpUnix
                 q.CommandText = "SELECT ISNULL(MAX(VersionNo), 0) FROM SYS_UnixClient_Scripts_Versions WITH (UPDLOCK, HOLDLOCK) WHERE ScriptId = @s";
                 q.Parameters.AddWithValue("@s", G(sid));
                 int max = Convert.ToInt32(q.ExecuteScalar());
-                if (max != baseNo) throw new Exception("Seit der Anfrage gibt es eine neuere Version (v" + max + " statt v" + baseNo + ") - nichts geschrieben, bitte neu beantragen.");
+                if (max != baseNo) throw new Exception("Seit der Planung gibt es eine neuere Version (v" + max + " statt v" + baseNo + ") - nichts geschrieben, bitte erneut aufrufen.");
                 if (baseNo > 0)
                 {
                     var bq = wc.CreateCommand(); bq.Transaction = tx;
                     bq.CommandText = "SELECT Content FROM SYS_UnixClient_Scripts_Versions WHERE ScriptId = @s AND VersionNo = @no";
                     bq.Parameters.AddWithValue("@s", G(sid)); bq.Parameters.AddWithValue("@no", baseNo);
                     object bc = bq.ExecuteScalar();
-                    if (Sha256(bc == null || bc is DBNull ? "" : (string)bc) != (string)p["baseSha256"]) throw new Exception("v" + baseNo + " wurde seit der Anfrage geaendert (Version bearbeiten in der Console?) - nichts geschrieben, bitte neu beantragen.");
+                    if (Sha256(bc == null || bc is DBNull ? "" : (string)bc) != (string)p["baseSha256"]) throw new Exception("v" + baseNo + " wurde seit der Planung geaendert (Version bearbeiten in der Console?) - nichts geschrieben, bitte erneut aufrufen.");
                 }
                 InsertVersion(wc, tx, vid, sid, no, (string)p["content"], ring, (string)p["collection"], DateTime.Now.ToOADate());
                 tx.Commit();
@@ -981,7 +976,7 @@ class AcmpUnix
                     curRing = r.GetInt32(0); curChanged = r.GetDouble(1);
                 }
                 if (curRing != oldRing || Math.Abs(curChanged - oldChanged) > 1e-9)
-                    throw new Exception("Ring von v" + p["versionNo"] + " wurde seit der Anfrage geaendert (jetzt " + RingText(curRing) + ") - nichts geschrieben, bitte neu beantragen.");
+                    throw new Exception("Ring von v" + p["versionNo"] + " wurde seit der Planung geaendert (jetzt " + RingText(curRing) + ") - nichts geschrieben, bitte erneut aufrufen.");
                 var j = new JObject(); j["kind"] = "set_ring"; j["von"] = requester; j["zeit"] = DateTime.Now.ToString("s"); j["vorher"] = new JObject(new JProperty("testRing", curRing), new JProperty("lastChangeDate", curChanged)); j["plan"] = p;
                 jf = SaveJournal(j, "ring");
                 var u = wc.CreateCommand(); u.Transaction = tx;

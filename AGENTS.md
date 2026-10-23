@@ -4,12 +4,12 @@ Ein Mensch hat dich gebeten, diesen ACMP-MCP-Server auf seinem ACMP-Server einzu
 
 ## Grundregeln
 
-- **Geheimnisse fasst du nicht an.** Den SICS-Benutzer fragt `install.ps1` selbst ab. API-Keys und Freigabe-Tokens erzeugen der Assistent bzw. `add-user.ps1` und zeigen sie nur dem Menschen im Terminal. Bitte den Menschen nie, dir Passwörter oder Keys in den Chat zu schreiben, und gib keine aus `config.local.json` oder `secrets.local.json` wieder.
+- **Geheimnisse fasst du nicht an.** Den SICS-Benutzer fragt `install.ps1` selbst ab. API-Keys und Web-Tokens erzeugen der Assistent bzw. `add-user.ps1` und zeigen sie nur dem Menschen im Terminal. Bitte den Menschen nie, dir Passwörter oder Keys in den Chat zu schreiben, und gib keine aus `config.local.json` oder `secrets.local.json` wieder.
 - **Admin-Schritte führt der Mensch aus.** Du läufst normalerweise ohne erhöhte Rechte. Erkläre deshalb den Befehl und lass ihn in einer PowerShell „Als Administrator ausführen“ laufen. Danach prüfst du das Ergebnis.
 - **Konsolen-Einstellungen (ACMP/AESB) kannst du nicht setzen.** Erkläre sie anhand von `docs/ACMP-VORBEREITUNG.md`.
 - **Nichts ins Netz öffnen, bevor ein Bediener existiert.** Der Server lauscht erst nur auf `127.0.0.1`. Der Assistent gibt ihn erst nach dem Anlegen des Administrators frei.
-- Der Server kann Befehle **auf allen verwalteten Endgeräten** ausführen. Schalte die Vier-Augen-Freigabe nicht ab (`approval.enabled`, `approval.bypassAll`), auch nicht „zum Testen“.
-- Den **CC-Writer** (Client Commands direkt in die ACMP-Datenbank schreiben), den **Kiosk-Writer** und die **weiteren Schreib-Tools** (Windows-Updates ablehnen, Unix Scripts, individuelle Felder) richtest du nur ein, wenn der Mensch das ausdrücklich will. Weise ihn darauf hin, dass Aagon das nicht vorsieht und die Datenbank vorher gesichert werden muss. `approvalGate` und `allowUntested` (in `ccWriter`, `kioskWriter`, `wumWriter`, `unixWriter` und `cfWriter`) änderst du nicht.
+- Der Server kann Befehle **auf allen verwalteten Endgeräten** ausführen, und seit Version 2 wirken Schreib-, Ausführ- und Lösch-Tools **sofort** (keine Vier-Augen-Freigabe mehr). Ruf sie nur auf ausdrücklichen Wunsch des Menschen auf, bei Tools mit `dryRun` zuerst mit `dryRun: true`, und teste die Einrichtung nur mit Lese-Tools. Die Notbremse (Weboberfläche → Einstellungen) zieht und löst nur der Mensch. `activity-*.jsonl` und `notbremse.json` im Installationsordner fasst du nicht an.
+- Den **CC-Writer** (Client Commands direkt in die ACMP-Datenbank schreiben), den **Kiosk-Writer** und die **weiteren Schreib-Tools** (Windows-Updates ablehnen, Unix Scripts, individuelle Felder, Jobs schalten) richtest du nur ein, wenn der Mensch das ausdrücklich will. Weise ihn darauf hin, dass Aagon das nicht vorsieht und die Datenbank vorher gesichert werden muss. `allowUntested` (in `ccWriter`, `kioskWriter`, `wumWriter`, `unixWriter`, `cfWriter` und `jobWriter`) änderst du nicht.
 
 ## Schritt 0 – Wo bist du?
 Der Server muss **auf dem ACMP-Server** laufen, denn er nutzt die dort installierten Aagon-DLLs.
@@ -32,13 +32,13 @@ Danach mit dem Menschen `docs/ACMP-VORBEREITUNG.md` Abschnitt „Pflicht“ durc
 ```
 Der Assistent ist interaktiv, deshalb führt ihn der **Mensch** in einer eigenen Admin-PowerShell aus, nicht du. Er erledigt alles weitere selbst:
 - Er fragt den SICS-Benutzer ab (Passwort verdeckt) und prüft die Anmeldung an ACMP.
-- Er legt den ersten Administrator/Freigeber an.
+- Er legt den ersten Administrator an (MCP-API-Key und Web-Login).
 - Er verknüpft optional die eigene ACMP-Identität (`acmp-token-setup.exe`).
 - Er richtet optionale Funktionen ein.
 - Er gibt den Server im LAN frei.
-- Am Ende zeigt er API-Key, Freigabe-Links und die Client-Konfiguration.
+- Am Ende zeigt er API-Key, Web-Login und die Client-Konfiguration.
 
-**Wichtig:** Diese Ausgabe enthält Geheimnisse, nämlich den API-Key und den Freigabe-Login. Bitte den Menschen **nicht**, sie dir zu zeigen. Frag nur nach dem Ergebnis: „Steht am Ende ‚Fertig‘? Gab es eine `[FEHLT]`-Zeile?“
+**Wichtig:** Diese Ausgabe enthält Geheimnisse, nämlich den API-Key und das Web-Token. Bitte den Menschen **nicht**, sie dir zu zeigen. Frag nur nach dem Ergebnis: „Steht am Ende ‚Fertig‘? Gab es eine `[FEHLT]`-Zeile?“
 
 Während der Assistent läuft, erklärst du bei Bedarf die einzelnen Schritte, etwa die Client-Command-Vorlage aus `docs/ACMP-VORBEREITUNG.md`.
 
@@ -48,7 +48,7 @@ Get-ScheduledTask ACMP-MCP-Server | Select State
 ```
 
 ## Schritt 3 – Client verbinden und testen
-Den Client richtet der Mensch auf **seinem** PC ein. Die Konfiguration hat ihm der Assistent am Ende angezeigt, Vorlagen für alle gängigen Clients stehen in `docs/CLIENTS.md`. Danach testet ihr mit `acmp_whoami` und `acmp_server_info`, beides reine Lesetools. Ein schreibendes Tool muss eine **Anfrage-Id** liefern, keine rohe ACMP-Antwort. Kommt eine rohe Antwort, ist die Freigabe aus. Melde das.
+Den Client richtet der Mensch auf **seinem** PC ein. Die Konfiguration hat ihm der Assistent am Ende angezeigt, Vorlagen für alle gängigen Clients stehen in `docs/CLIENTS.md`. Danach testet ihr mit `acmp_whoami` und `acmp_server_info`, beides reine Lesetools. Ob Aktivitätsprotokoll und Notbremse laufen, zeigt die Weboberfläche (`/activity`, `/settings`). Ein Schreib-Tool testest du nicht "zur Probe", höchstens mit `dryRun: true`.
 
 ## Schritt 4 – Weitere Kolleg:innen
 Der Mensch führt auf dem Server als Admin aus:
@@ -56,27 +56,28 @@ Der Mensch führt auf dem Server als Admin aus:
 cd C:\ProgramData\AcmpMcp
 .\add-user.ps1
 ```
-Alternativ geht es im Browser über `/onboarding`, mit Login als Freigeber.
+Alternativ geht es im Browser über `/onboarding`, mit dem eigenen Web-Login.
 
 ## Ohne Rückfragen (nur wenn ausdrücklich gewünscht)
-`.\install.ps1 -NonInteractive -SicsUser <Benutzer> -AdminName <kurzname> -AdminEmail <mail>` installiert ohne Rückfragen, braucht dafür aber Admin-Rechte. Das SICS-Passwort liest das Skript aus `$env:ACMP_SICS_PASSWORD`. **Diese Variable setzt der Mensch selbst** in seiner Sitzung, nicht du, und es läuft nie über den Chat. Die Schlussausgabe mit dem API-Key gibst du nicht wieder. Im Zweifel nimm den interaktiven Assistenten.
+`.\install.ps1 -NonInteractive -SicsUser <Benutzer> -AdminName <kurzname>` installiert ohne Rückfragen, braucht dafür aber Admin-Rechte. Das SICS-Passwort liest das Skript aus `$env:ACMP_SICS_PASSWORD`. **Diese Variable setzt der Mensch selbst** in seiner Sitzung, nicht du, und es läuft nie über den Chat. Die Schlussausgabe mit dem API-Key gibst du nicht wieder. Im Zweifel nimm den interaktiven Assistenten.
 
 ## Optionale Funktionen
-Siehe `docs/ACMP-VORBEREITUNG.md` → „Optional“: `acmp_run_powershell` (Client-Command-Vorlage mit `%SCRIPT%`), DB-Report-Tools (`grant-db-readonly.sql`), CC-Writer (`grant-cc-writer.sql` + `setup-cc-writer.ps1`, standardmäßig aus), Kiosk-Writer (`grant-kiosk-writer.sql` + `setup-kiosk-writer.ps1`, standardmäßig aus), weitere Schreib-Tools (`grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql` + `setup-extra-writers.ps1`, standardmäßig aus), E-Mail-Benachrichtigung. Jede Option wird in `config.local.json` eingetragen. Das macht der Mensch als Admin, danach Dienst neu starten.
+Siehe `docs/ACMP-VORBEREITUNG.md` → „Optional“: `acmp_run_powershell` (Client-Command-Vorlage mit `%SCRIPT%`), DB-Report-Tools (`grant-db-readonly.sql`), CC-Writer (`grant-cc-writer.sql` + `setup-cc-writer.ps1`, standardmäßig aus), Kiosk-Writer (`grant-kiosk-writer.sql` + `setup-kiosk-writer.ps1`, standardmäßig aus), weitere Schreib-Tools (`grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql`, `grant-jobs-writer.sql` + `setup-extra-writers.ps1`, standardmäßig aus). Jede Option wird in `config.local.json` eingetragen. Das macht der Mensch als Admin, danach Dienst neu starten.
 
 Nach dem Einrichten des CC-Writers rufst du `acmp_cc_writer_status` auf. Steht dort nicht „bestanden“, erklärst du die gesperrte Prüfung anhand der Tabelle in `docs/ACMP-VORBEREITUNG.md`. Das SQL-Kennwort fragt `setup-cc-writer.ps1` selbst verdeckt ab, es läuft nie über den Chat.
 
 Der **Kiosk-Writer** setzt den CC-Writer voraus (gleicher SQL-Login): `grant-kiosk-writer.sql` (SQL-Admin), dann `setup-kiosk-writer.ps1` (Admin). Prüfen mit `acmp_kiosk_tree` und `status: true`.
 
-Die **weiteren Schreib-Tools** setzen ebenfalls den CC-Writer voraus: je Funktion das SQL (SQL-Admin), dann `setup-extra-writers.ps1` (Admin, fragt je Funktion nach). Prüfen mit `acmp_wum_declined`, `acmp_unix_scripts` bzw. `acmp_cf_list`, jeweils mit `status: true`. `acmp_cc_set_parameters` gehört zum CC-Writer und braucht nur `grant-cf-params.sql` Abschnitt 3. Unix-Jobs startet der Mensch in der ACMP-Console, nicht der MCP. Meldet ein Unix-Job „Erfolg“ ohne Ausgabe, fehlt vermutlich eine freie Unix-Script-Lizenz.
+Die **weiteren Schreib-Tools** setzen ebenfalls den CC-Writer voraus: je Funktion das SQL (SQL-Admin), dann `setup-extra-writers.ps1` (Admin, fragt je Funktion nach). Prüfen mit `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_cf_list` bzw. `acmp_jobs`, jeweils mit `status: true`. `acmp_cc_set_parameters` gehört zum CC-Writer und braucht nur `grant-cf-params.sql` Abschnitt 3. Unix-Jobs startet der Mensch in der ACMP-Console, nicht der MCP. Meldet ein Unix-Job „Erfolg“ ohne Ausgabe, fehlt vermutlich eine freie Unix-Script-Lizenz.
 
-**Bediener und Schreibrechte:** Der SQL-Login gehört dem Server. Wer die Schreib-Tools (CC-Writer, Kiosk-Writer, weitere Schreib-Tools, `acmp_lib_install`) beantragen darf, steht in `ccWriter.allowedRequesters`. Kommt ein Bediener über `/onboarding` dazu, sag dem Menschen, dass er ihn mit `.\setup-cc-writer.ps1 -AddRequester <kurzname>` freischalten muss, wenn die Person schreiben soll. `add-user.ps1` fragt das selbst ab.
+**Bediener und Schreibrechte:** Der SQL-Login gehört dem Server. Wer die Schreib-Tools (CC-Writer, Kiosk-Writer, weitere Schreib-Tools, `acmp_lib_install`) nutzen darf, steht in `ccWriter.allowedRequesters`. Kommt ein Bediener über `/onboarding` dazu, sag dem Menschen, dass er ihn mit `.\setup-cc-writer.ps1 -AddRequester <kurzname>` freischalten muss, wenn die Person schreiben soll. `add-user.ps1` fragt das selbst ab.
 
 ## Aktualisieren
 ```powershell
 git pull
 .\install.ps1          # als Administrator; config.local.json bleibt erhalten
 ```
+Beim Update von Version 1 stellt der Assistent die Config um (`approval` → `web`, mit Sicherung). Die bisherigen Freigabe-Tokens sind danach die Web-Logins; offene Freigabe-Anträge werden nicht mehr ausgeführt. Sag dem Menschen das.
 
 ## Fehlersuche
 | Symptom (`server.log`) | Ursache / Abhilfe |

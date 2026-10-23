@@ -10,8 +10,8 @@
 //    erster Einsatz mit einem harmlosen, vom Bereinigungsjob abgelehnten Update und Kontrolle in der Console.
 //  - Ein Bereinigungsjob lehnt nachts unbenutzte Updates mit dem Kommentar "Autodeclined by Cleanupjob for being unused." ab. Die Liste blendet
 //    sie standardmaessig aus (includeAuto=true zeigt sie).
-// Regeln: nur ueber die Vier-Augen-Freigabe (auch bei bypassAll, AlwaysGatedTools), nur einzelne Update-Ids (hoechstens MaxIds je Auftrag),
-// Pflicht-Kommentar, Plan mit dem Stand der Updates eingefroren (hat sich bis zur Zustimmung etwas geaendert, wird nichts geschrieben),
+// Regeln: erst dryRun (Vorschau), nur einzelne Update-Ids (hoechstens MaxIds je Auftrag),
+// Pflicht-Kommentar, Plan mit dem Stand der Updates (hat sich bis zum Schreiben etwas geaendert, wird nichts geschrieben),
 // Sicherung der betroffenen Zeilen vor dem Schreiben (wum-backups\), eine Transaktion je Auftrag, Kontrolle danach.
 // Abgeloeste (IsSuperseded), abgelaufene (IsExpired) und widerrufene (IsRevoked) Updates lehnt das Tool nicht ab (bringt nichts bzw. nicht noetig).
 using System;
@@ -51,7 +51,6 @@ class AcmpWum
 
     public bool ConfigOk { get; private set; }
     public string DisabledReason { get; private set; }
-    public bool ApprovalGate { get; private set; }
     public ICollection<string> AllowedRequesters { get { return _allowedReq; } }
 
     public AcmpWum(string readCs, JObject cfg, JObject ccCfg, string cfgDir, Action<string> log, Func<string> acmpVersion)
@@ -59,8 +58,6 @@ class AcmpWum
         _readCs = readCs; _log = log; _acmpVersion = acmpVersion;
         string bd = cfg != null && cfg["backupDir"] != null ? (string)cfg["backupDir"] : "wum-backups";
         _backupDir = Path.IsPathRooted(bd) ? bd : Path.Combine(cfgDir, bd);
-        JToken gate = cfg != null && cfg["approvalGate"] != null ? cfg["approvalGate"] : (ccCfg != null ? ccCfg["approvalGate"] : null);
-        ApprovalGate = gate == null || (bool)gate;
         _allowUntested = cfg != null && cfg["allowUntested"] != null && (bool)cfg["allowUntested"];
         _rebuildFlags = cfg == null || cfg["rebuildFlags"] == null || (bool)cfg["rebuildFlags"];
         if (cfg == null || cfg["enabled"] == null || !(bool)cfg["enabled"]) { DisabledReason = "wumWriter.enabled ist nicht true (nur Lesen und dryRun)"; return; }
@@ -327,7 +324,6 @@ class AcmpWum
         if (!ConfigOk) { o["status"] = "aus"; o["reason"] = DisabledReason; return o; }
         JObject pf = Preflight(refresh);
         o["status"] = (bool)pf["ok"] ? "aktiv" : "gesperrt";
-        o["approvalGate"] = ApprovalGate;
         o["allowedRequesters"] = new JArray(new List<string>(_allowedReq).ToArray());
         o["declineTool"] = pf["declineTool"]; o["restoreTool"] = pf["restoreTool"];
         o["flagsNeuAufbauen"] = _rebuildFlags && (bool)pf["rebuildFlags"];
@@ -338,7 +334,6 @@ class AcmpWum
     public void CheckWrite(string requester, string action)
     {
         if (!ConfigOk) throw new Exception("Update-Ablehnen ist ausgeschaltet: " + DisabledReason);
-        if (!ApprovalGate) throw new Exception("acmp_wum_decline und acmp_wum_restore laufen nur ueber die Vier-Augen-Freigabe (wumWriter.approvalGate bzw. ccWriter.approvalGate ist aus) - nichts geschrieben. Sonst in der ACMP-Console ablehnen.");
         if (requester == null || !_allowedReq.Contains(requester)) throw new Exception("Antragsteller '" + requester + "' darf Updates nicht ablehnen (wumWriter.allowedRequesters).");
         JObject pf = Preflight(false);
         if (pf == null || !(bool)pf["ok"]) throw new Exception("Update-Ablehnen gesperrt - Vorpruefung nicht bestanden: " + (pf != null ? (string)pf["summary"] : "keine Pruefung") + " (Details: acmp_wum_declined mit status=true). Nichts geschrieben.");
@@ -581,13 +576,13 @@ class AcmpWum
     }
 
     // ================= Schreiben =================
-    // Fuehrt einen Plan aus (nur der eingefrorene Plan aus der Freigabe; ohne _plan wird nichts geschrieben)
+    // Fuehrt einen Plan aus (den der Server direkt vorher mit Plan() erstellt hat; ohne _plan wird nichts geschrieben)
     public JObject Execute(string tool, JObject a, string requester)
     {
         string action = tool == "acmp_wum_restore" ? "restore" : "decline";
         CheckWrite(requester, action);
         JObject p = a["_plan"] as JObject;
-        if (p == null) throw new Exception(tool + " schreibt nur mit dem eingefrorenen Plan aus der Vier-Augen-Freigabe - nichts geschrieben.");
+        if (p == null) throw new Exception(tool + " schreibt nur mit einem vom Server erstellten Plan - nichts geschrieben.");
         if ((string)p["action"] != action) throw new Exception("Plan passt nicht zum Tool (" + p["action"] + " / " + tool + ") - nichts geschrieben.");
         lock (_wLock)
         {
@@ -641,7 +636,7 @@ class AcmpWum
             string id = (string)planned["id"];
             JObject now = Lookup(rc, id);
             List<string> d = PlanDiff(action, planned, now);
-            if (d.Count > 0) throw new Exception("Update " + id + " (\"" + planned["name"] + "\") hat sich seit der Anfrage geaendert: " + string.Join("; ", d.ToArray()) + " - nichts geschrieben, bitte neu beantragen.");
+            if (d.Count > 0) throw new Exception("Update " + id + " (\"" + planned["name"] + "\") hat sich seit der Planung geaendert: " + string.Join("; ", d.ToArray()) + " - nichts geschrieben, bitte erneut aufrufen.");
             if (action == "decline" && (bool)now["revoked"]) throw new Exception("Update " + id + " ist inzwischen widerrufen - nichts geschrieben.");
             ids.Add(id); before.Add(now);
         }

@@ -80,8 +80,8 @@ if ($AddRequester) {
 }
 
 Write-Hint "Direktes Schreiben in die ACMP-Datenbank ist von Aagon nicht vorgesehen. Vorher die Datenbank sichern."
-Write-Info "Der Writer legt nur ENTWUERFE an (nie freigegeben), jede Schreibaktion braucht eine Zustimmung auf der"
-Write-Info "Freigabe-Seite, und geschrieben wird nur nach bestandener Kompatibilitaetspruefung (acmp_cc_writer_status)."
+Write-Info "Der Writer legt nur ENTWUERFE an (freigeben nur mit acmp_cc_release), jede Schreibaktion wirkt sofort und steht im"
+Write-Info "Aktivitaetsprotokoll, geschrieben wird nur nach bestandener Kompatibilitaetspruefung (acmp_cc_writer_status)."
 if (-not (Read-YesNo "Weiter?" $false)) { Write-Info "Abgebrochen - nichts geaendert."; exit 0 }
 
 # ---------------------------------------------------------------- Voraussetzung: Lesezugang
@@ -203,7 +203,7 @@ Set-CfgProp $w "connectionString" $writeCs
 Set-CfgProp $w "templateScriptId" $TemplateScriptId
 Set-CfgProp $w "allowedRequesters" $AllowedRequesters
 Set-CfgProp $w "allowedFolderIds" $AllowedFolderIds
-Set-CfgProp $w "approvalGate" $true
+if ($w.PSObject.Properties["approvalGate"]) { $w.PSObject.Properties.Remove("approvalGate") }
 if (-not $w.PSObject.Properties["allowUntested"]) { Set-CfgProp $w "allowUntested" $false }
 Set-CfgProp $w "fileSourceRoots" $FileSourceRoots
 Set-CfgProp $w "fileRepositoryRoot" $(if ($FileRepositoryRoot) { $FileRepositoryRoot } else { "" })
@@ -216,7 +216,7 @@ Restart-IfWanted
 Write-Host ""
 Write-Ok "CC-Writer eingerichtet."
 Write-Info "Pruefen: im MCP-Client 'acmp_cc_writer_status' aufrufen - dort muss 'bestanden' stehen."
-Write-Info "Danach z.B.: 'Lege im Testordner einen Entwurf an, der ...' - die Freigabe-Anfrage zeigt jeden Schritt."
+Write-Info "Danach z.B.: 'Lege im Testordner einen Entwurf an, der ...' - erst als dryRun, die Vorschau zeigt jeden Schritt."
 Write-Info "Weitere Bediener freischalten: .\setup-cc-writer.ps1 -AddRequester <kurzname>"
 Write-Info "Kiosk pflegen (optional): grant-kiosk-writer.sql, dann .\setup-kiosk-writer.ps1"
 Write-Info "Ausschalten: .\setup-cc-writer.ps1 -Disable"

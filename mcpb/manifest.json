@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "acmp-mcp",
   "display_name": "ACMP-MCP-Server",
-  "version": "1.0.0",
-  "description": "Aagon ACMP für die KI: Clients, Inventar, Schwachstellen, Jobs, Tickets und Assets, mit Vier-Augen-Freigabe für alles, was etwas verändert.",
-  "long_description": "Verbindet Claude Desktop mit eurem **ACMP-MCP-Server** für die Public API von **Aagon ACMP**. Ihr fragt in normaler Sprache, zum Beispiel „Welche Rechner waren seit 30 Tagen offline?“, und die KI holt sich die Antwort direkt aus ACMP.\n\n**Diese Erweiterung ist nur die Verbindung.** Den Server selbst richtet ihr einmal auf dem ACMP-Server ein (`install.ps1`, siehe README im Repo). Am Ende zeigt der Assistent die Server-Adresse und euren persönlichen API-Key, beides tragt ihr hier in den Einstellungen ein. Weitere Kolleg:innen bekommen ihren Key über `add-user.ps1` oder die Seite `/onboarding` des Servers.\n\n**Vier-Augen-Freigabe:** Lesen läuft sofort. Alles, was etwas verändert, ausführt oder löscht, landet erst als Antrag auf der Freigabe-Seite des Servers und läuft erst, wenn genug verschiedene Personen im Browser zugestimmt haben.\n\n**Sicherheit:** Der API-Key wird im Schlüsselbund des Betriebssystems gespeichert. Der Server bringt kein TLS mit; im LAN beschränkt ihr per Firewall die Quell-Subnetze, über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor. Für HTTPS mit interner Zertifizierungsstelle kann das Stammzertifikat in den Einstellungen hinterlegt werden.\n\nKein Produkt der Aagon GmbH. ACMP und AESB sind Marken der Aagon GmbH.",
+  "version": "1.1.0",
+  "description": "Aagon ACMP für die KI: Clients, Inventar, Schwachstellen, Jobs, Tickets und Assets, mit Aktivitätsprotokoll und Notbremse für alles, was etwas verändert.",
+  "long_description": "Verbindet Claude Desktop mit eurem **ACMP-MCP-Server** für die Public API von **Aagon ACMP**. Ihr fragt in normaler Sprache, zum Beispiel „Welche Rechner waren seit 30 Tagen offline?“, und die KI holt sich die Antwort direkt aus ACMP.\n\n**Diese Erweiterung ist nur die Verbindung.** Den Server selbst richtet ihr einmal auf dem ACMP-Server ein (`install.ps1`, siehe README im Repo). Am Ende zeigt der Assistent die Server-Adresse und euren persönlichen API-Key, beides tragt ihr hier in den Einstellungen ein. Weitere Kolleg:innen bekommen ihren Key über `add-user.ps1` oder die Seite `/onboarding` des Servers.\n\n**Aktivitätsprotokoll und Notbremse:** Lesen und Schreiben wirken sofort, vorher zeigt die KI eine Vorschau (`dryRun`). Jede Schreib-, Ausführ- und Löschaktion steht im Aktivitätsprotokoll des Servers, und die Notbremse auf seiner Weboberfläche sperrt alle Schreib-Tools auf einen Klick. (Ab Server-Version 2, vorher gab es eine Vier-Augen-Freigabe.)\n\n**Sicherheit:** Der API-Key wird im Schlüsselbund des Betriebssystems gespeichert. Der Server bringt kein TLS mit; im LAN beschränkt ihr per Firewall die Quell-Subnetze, über Netzgrenzen hinweg gehört ein TLS-Proxy oder VPN davor. Für HTTPS mit interner Zertifizierungsstelle kann das Stammzertifikat in den Einstellungen hinterlegt werden.\n\nKein Produkt der Aagon GmbH. ACMP und AESB sind Marken der Aagon GmbH.",
   "author": {
     "name": "Herzog-GmbH",
     "url": "https://github.com/Herzog-GmbH"
@@ -18,7 +18,7 @@
   "support": "https://github.com/Herzog-GmbH/acmp-mcp/issues",
   "icon": "icon.png",
   "license": "MIT",
-  "keywords": ["acmp", "aagon", "client management", "endpoint management", "helpdesk", "inventory", "vulnerabilities", "four-eyes approval"],
+  "keywords": ["acmp", "aagon", "client management", "endpoint management", "helpdesk", "inventory", "vulnerabilities", "activity log"],
   "server": {
     "type": "node",
     "entry_point": "server/index.js",
@@ -63,10 +63,9 @@
     { "name": "acmp_missing_updates", "description": "Fehlende Windows-Updates" },
     { "name": "acmp_vulnerabilities", "description": "Schwachstellen (CVEs) mit Score" },
     { "name": "acmp_get_tickets", "description": "Helpdesk-Tickets lesen" },
-    { "name": "acmp_create_ticket", "description": "Ticket anlegen (mit Freigabe)" },
-    { "name": "acmp_enqueue_client_command", "description": "Vorhandenen Client Command starten (mit Freigabe)" },
-    { "name": "acmp_run_powershell", "description": "PowerShell als SYSTEM auf einem Client (Freigabe durch zwei Personen)" },
-    { "name": "acmp_approval_status", "description": "Stand eines Freigabe-Antrags" },
+    { "name": "acmp_create_ticket", "description": "Ticket anlegen" },
+    { "name": "acmp_enqueue_client_command", "description": "Vorhandenen Client Command starten" },
+    { "name": "acmp_run_powershell", "description": "PowerShell als SYSTEM auf einem Client (nach OK im Chat, steht im Aktivitätsprotokoll)" },
     { "name": "acmp_call", "description": "Jedes der 167 Public-API-Kommandos ohne eigenes Tool" }
   ],
   "tools_generated": true,

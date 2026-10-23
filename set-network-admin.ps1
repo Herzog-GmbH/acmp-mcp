@@ -2,7 +2,7 @@
 #   .\set-network-admin.ps1 -BindAddress 10.0.0.5
 #   .\set-network-admin.ps1 -BindAddress 10.0.0.5 -AllowedSubnets "10.0.0.0/24"
 #   .\set-network-admin.ps1 -BindAddress 127.0.0.1      (zurueck auf nur-lokal)
-# Setzt mcp.bindAddress + approval.publicUrl in config.local.json, passt die Firewall-Regel an
+# Setzt mcp.bindAddress + web.publicUrl in config.local.json, passt die Firewall-Regel an
 # und startet den Dienst neu. Verweigert LAN-Betrieb, solange kein Bediener (API-Key) existiert.
 param(
   [Parameter(Mandatory = $true)][string]$BindAddress,
@@ -26,9 +26,9 @@ if (-not $local -and -not $hasKey) {
 Copy-Item $cfgPath "$cfgPath.$(Get-Date -Format yyyyMMdd_HHmmss).bak"
 $cfg.mcp.bindAddress = $BindAddress
 $hostForUrl = if ($BindAddress -in @("0.0.0.0", "*", "+")) { $env:COMPUTERNAME } else { $BindAddress }
-$cfg.approval.publicUrl = "http://${hostForUrl}:$port"
+Set-PublicUrl $cfg "http://${hostForUrl}:$port"
 $cfg | ConvertTo-Json -Depth 20 | Set-Content -Path $cfgPath -Encoding UTF8
-Write-Host "config.local.json: bindAddress=$BindAddress, publicUrl=$($cfg.approval.publicUrl) (Sicherung angelegt)" -ForegroundColor Green
+Write-Host "config.local.json: bindAddress=$BindAddress, publicUrl=$(Get-PublicUrl $cfg) (Sicherung angelegt)" -ForegroundColor Green
 
 Get-NetFirewallRule -DisplayName "ACMP MCP Server ($port)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 if (-not $local) {

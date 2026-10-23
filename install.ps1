@@ -3,18 +3,20 @@
 #   .\install.ps1 -CheckOnly        Nur Voraussetzungen pruefen, nichts veraendern (kein Admin noetig)
 #   .\install.ps1                   Assistent: installieren, ersten Administrator anlegen, LAN-Freigabe,
 #                                   Client-Konfiguration - am Ende stehen alle Links und Befehle bereit
-#   .\install.ps1 -NonInteractive -SicsUser op -AdminName admin -AdminEmail it@firma.de
+#   .\install.ps1 -NonInteractive -SicsUser op -AdminName admin
 #                                   Ohne Rueckfragen (Passwort aus $env:ACMP_SICS_PASSWORD), z.B. fuer Skripte
 #
 # Erneut ausfuehren ist gefahrlos: vorhandene config.local.json und Bediener bleiben erhalten,
 # eine laufende Installation wird aktualisiert, bereits erledigte Schritte werden uebersprungen.
+# Ab Version 2 (22.10.2026) gibt es keine Vier-Augen-Freigabe mehr: eine alte Config wird umgestellt (approval -> web,
+# Web-Logins bleiben gleich), Schreibaktionen stehen im Aktivitaetsprotokoll, die Notbremse auf /settings sperrt sie.
 param(
   [string]$InstallDir = "C:\ProgramData\AcmpMcp",
   [string]$SicsDir    = "C:\Program Files (x86)\Aagon\AESB SICS\SICS",
   [int]$HttpPort      = 8765,
   [string]$SicsUser,
   [string]$AdminName,
-  [string]$AdminEmail,
+  [string]$AdminEmail,      # veraltet (Version 1: Benachrichtigung der Freigeber), wird ignoriert
   [string]$AdminAcmpUser,
   [string]$BindAddress,
   [string[]]$AllowedSubnets,
@@ -80,7 +82,7 @@ icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:
 Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
-  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1") {
+  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","grant-jobs-writer.sql","grant-jobs-writer2.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1") {
     Copy-Item (Join-Path $repo $f) $InstallDir -Force
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null
@@ -118,12 +120,18 @@ if ($newConfig) {
   $cfg = Get-Content (Join-Path $repo "config.example.json") -Raw | ConvertFrom-Json
   $cfg.mcp.httpPort = $HttpPort
   $cfg.mcp.bindAddress = "127.0.0.1"
-  $cfg.approval.publicUrl = "http://127.0.0.1:$HttpPort"
+  Set-PublicUrl $cfg "http://127.0.0.1:$HttpPort"
   Save-AcmpConfig $cfg $cfgPath
   Set-SicsCredentials
   Write-Ok "config.local.json angelegt"
 } else {
   Write-Ok "config.local.json vorhanden - Zugangsdaten bleiben unveraendert"
+  $cfgOld = Read-AcmpConfig $cfgPath
+  if (Convert-ApprovalConfig $cfgOld) {
+    Copy-Item $cfgPath ("$cfgPath.bak-" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+    Save-AcmpConfig $cfgOld $cfgPath
+    Write-Ok "config.local.json auf Version 2 umgestellt: approval -> web (Web-Logins bleiben gleich), keine Vier-Augen-Freigabe mehr (Sicherung angelegt)"
+  }
 }
 
 # ================================================================ 5) Dienst starten + Verbindung pruefen
@@ -151,27 +159,26 @@ for ($try = 1; ; $try++) {
 }
 
 # ================================================================ 6) Erster Administrator
-Write-Step 6 $T "Administrator / Freigeber"
+Write-Step 6 $T "Administrator"
 $cfg = Read-AcmpConfig $cfgPath
 $created = $null
-$approvers = @(Get-Approvers $cfg)
-if ($approvers.Count -gt 0) {
-  Write-Ok ("Freigeber vorhanden: " + (($approvers | ForEach-Object { $_.name }) -join ", "))
+$webUsers = @(Get-WebUsers $cfg)
+if ($webUsers.Count -gt 0) {
+  Write-Ok ("Bediener mit Web-Zugang vorhanden: " + (($webUsers | ForEach-Object { $_.name }) -join ", "))
   Write-Info "Weitere Kolleg:innen: .\add-user.ps1 (im Ordner $InstallDir)"
 } else {
   Write-Info "Jetzt legst du den ersten Bediener an. Er bekommt einen eigenen MCP-API-Key und einen Login fuer die"
-  Write-Info "Freigabe-Seite (Vier-Augen-Prinzip: Schreib-/Ausfuehrbefehle laufen erst nach Zustimmung)."
+  Write-Info "Weboberflaeche (Uebersicht, Aktivitaetsprotokoll aller Schreibaktionen, Notbremse, Onboarding)."
   $defName = ($env:USERNAME -replace '[^A-Za-z0-9_.-]', '').ToLower()
   $name  = if ($AdminName)  { $AdminName }  elseif ($ask) { Read-Value "Kurzname (2-32 Zeichen: Buchstaben, Zahlen, . _ -)" $defName '^[A-Za-z0-9_.-]{2,32}$' "Nur Buchstaben, Zahlen und . _ - (2-32 Zeichen)." } else { $defName }
-  $email = if ($AdminEmail) { $AdminEmail } elseif ($ask) { Read-Value "E-Mail fuer Freigabe-Benachrichtigungen" "" '^[^@\s]+@[^@\s]+$' "Bitte eine gueltige E-Mail-Adresse." } else { throw "-AdminEmail fehlt." }
   $acmpU = if ($PSBoundParameters.ContainsKey('AdminAcmpUser')) { $AdminAcmpUser } elseif ($ask) {
     Write-Info "Optional: dein lokaler ACMP-Benutzer (ACMP-Konsole > Benutzer). Dann prueft ACMP deine echten Rechte,"
     Write-Info "statt alles mit dem SICS-Benutzer auszufuehren. Leer lassen = spaeter nachtragen."
     Read-Value "ACMP-Benutzername (optional)" "" '^([A-Za-z0-9_.-]{2,32})?$' "Nur Buchstaben, Zahlen und . _ -"
   } else { "" }
   if ($name -notmatch '^[A-Za-z0-9_.-]{2,32}$') { throw "Ungueltiger Kurzname '$name'." }
-  $created = Add-McpUser $cfgPath $name $acmpU $true $email
-  Write-Ok "Bediener '$name' angelegt (MCP-API-Key + Freigabe-Login erzeugt)"
+  $created = Add-McpUser $cfgPath $name $acmpU $true
+  Write-Ok "Bediener '$name' angelegt (MCP-API-Key + Web-Login erzeugt)"
 }
 
 # ================================================================ 7) ACMP-Identitaet
@@ -242,31 +249,17 @@ if ($ask) {
       $cfg = Read-AcmpConfig $cfgPath
     } else { Write-Info "Spaeter: cd $InstallDir; .\setup-kiosk-writer.ps1" }
   }
-  $extraActive = @("wumWriter","unixWriter","cfWriter" | Where-Object { $cfg.$_ -and $cfg.$_.enabled })
-  if ($extraActive.Count -eq 3) { Write-Ok "Weitere Schreib-Tools aktiv (Windows-Updates, Unix Scripts, individuelle Felder)" }
-  elseif ($ccNow -and (Read-YesNo "Weitere Schreib-Tools: Windows-Updates ablehnen, Unix Scripts schreiben, individuelle Felder anlegen? Von Aagon nicht vorgesehen" $false)) {
+  $extraActive = @("wumWriter","unixWriter","cfWriter","jobWriter" | Where-Object { $cfg.$_ -and $cfg.$_.enabled })
+  if ($extraActive.Count -eq 4) { Write-Ok "Weitere Schreib-Tools aktiv (Windows-Updates, Unix Scripts, individuelle Felder, Jobs)" }
+  elseif ($ccNow -and (Read-YesNo "Weitere Schreib-Tools: Windows-Updates ablehnen, Unix Scripts schreiben, individuelle Felder anlegen, Jobs schalten? Von Aagon nicht vorgesehen" $false)) {
     Write-Info "Vorbereitung (docs\ACMP-VORBEREITUNG.md > 'Weitere Schreib-Tools'):"
     Write-Info "  1. Datenbank sichern"
-    Write-Info "  2. je Funktion das SQL als SQL-Admin ausfuehren: grant-wum-writer.sql, grant-unix-writer.sql, grant-cf-params.sql"
+    Write-Info "  2. je Funktion das SQL als SQL-Admin ausfuehren: grant-wum-writer.sql, grant-unix-writer.sql, grant-cf-params.sql, grant-jobs-writer.sql (+2)"
     if (Read-YesNo "Ist das erledigt? Dann jetzt setup-extra-writers.ps1 starten (fragt je Funktion nach)" $false) {
       if ($changed) { Save-AcmpConfig $cfg $cfgPath; $changed = $false }
       try { & (Join-Path $InstallDir "setup-extra-writers.ps1") -NoRestart } catch { Write-Bad "setup-extra-writers.ps1: $($_.Exception.Message)" }
       $cfg = Read-AcmpConfig $cfgPath
     } else { Write-Info "Spaeter: cd $InstallDir; .\setup-extra-writers.ps1" }
-  }
-  $smtpActive = $cfg.approval.notify -and $cfg.approval.notify.enabled -and "$($cfg.approval.notify.smtpHost)" -notlike "HIER_*"
-  if ($smtpActive) { Write-Ok "E-Mail-Benachrichtigung aktiv" }
-  elseif (Read-YesNo "E-Mail an Freigeber bei neuen Freigabe-Anfragen?" $false) {
-    $sh = Read-Value "SMTP-Relay (Hostname/IP, leer = ueberspringen)" ""
-    if ($sh) {
-      $cfg.approval.notify.smtpHost = $sh
-      $cfg.approval.notify.smtpPort = [int](Read-Value "Port" "25" '^\d+$')
-      $defFrom = if ($env:USERDNSDOMAIN) { ("acmp-mcp@" + $env:USERDNSDOMAIN).ToLower() } else { "" }
-      $cfg.approval.notify.from = Read-Value "Absenderadresse" $defFrom '^[^@\s]+@[^@\s]+$' "Bitte eine gueltige E-Mail-Adresse."
-      $cfg.approval.notify.enabled = $true
-      $changed = $true
-      Write-Ok "SMTP eingetragen (ohne Anmeldung; Benutzer/Passwort bei Bedarf in config.local.json ergaenzen)"
-    }
   }
 } else { Write-Info "uebersprungen (-NonInteractive)" }
 if ($changed) { Save-AcmpConfig $cfg $cfgPath }
@@ -323,7 +316,7 @@ if ($created) {
     Write-Info "Danach den Client neu starten und testen: 'Wer bin ich in ACMP?' (Tool acmp_whoami)."
   }
 } else {
-  Write-Info "Weboberflaeche:  $publicUrl/dashboard  (Login mit deinem Freigabe-Token)"
+  Write-Info "Weboberflaeche:  $publicUrl/login  (Kurzname + Web-Token; bei Installationen vor Version 2 der bisherige Freigabe-Token)"
 }
 Write-Host ""
 Write-Info "Weitere Kolleg:innen:  cd $InstallDir; .\add-user.ps1"

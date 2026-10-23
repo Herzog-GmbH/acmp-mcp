@@ -116,36 +116,67 @@ function New-RandomToken([int]$bytes) {
 
 function Get-McpUsers($cfg) {
   $list = @()
-  if ($cfg.approval -and $cfg.approval.requester) { $list += [pscustomobject]@{ name = $cfg.approval.requester; acmpUser = $cfg.mcp.defaultAcmpUser } }
+  $defReq = if ($cfg.mcp -and $cfg.mcp.defaultRequester) { $cfg.mcp.defaultRequester } elseif ($cfg.approval -and $cfg.approval.requester) { $cfg.approval.requester } else { $null }
+  if ($defReq) { $list += [pscustomobject]@{ name = $defReq; acmpUser = $cfg.mcp.defaultAcmpUser } }
   if ($cfg.mcp -and $cfg.mcp.users) { $list += @($cfg.mcp.users | Where-Object { $_.name }) }
   $list
 }
 
-function Get-Approvers($cfg) {
-  if ($cfg.approval -and $cfg.approval.approvers) { @($cfg.approval.approvers | Where-Object { $_.name -and $_.token -and -not "$($_.token)".StartsWith("HIER_") }) } else { @() }
+# Bediener mit Zugang zur Weboberflaeche (web.users; Configs von vor Version 2: approval.approvers)
+function Get-WebUsers($cfg) {
+  $list = @()
+  if ($cfg.web -and $cfg.web.users) { $list += @($cfg.web.users | Where-Object { $_.name -and $_.token -and -not "$($_.token)".StartsWith("HIER_") }) }
+  if ($cfg.approval -and $cfg.approval.approvers) { $list += @($cfg.approval.approvers | Where-Object { $_.name -and $_.token -and -not "$($_.token)".StartsWith("HIER_") }) }
+  $list
 }
 
-# Legt einen Bediener an (wie /setup bzw. /onboarding im Server). Gibt ApiKey und ggf. ApprovalToken zurueck.
-function Add-McpUser([string]$cfgPath, [string]$name, [string]$acmpUser, [bool]$isApprover, [string]$email) {
+# Legt einen Bediener an (wie /setup bzw. /onboarding im Server). Gibt ApiKey und ggf. WebToken zurueck.
+function Add-McpUser([string]$cfgPath, [string]$name, [string]$acmpUser, [bool]$web) {
   $cfg = Read-AcmpConfig $cfgPath
   foreach ($u in (Get-McpUsers $cfg)) { if ($u.name -ieq $name) { throw "Ein Bediener '$name' existiert bereits." } }
+  if ($web) { foreach ($u in (Get-WebUsers $cfg)) { if ($u.name -ieq $name) { throw "Fuer '$name' gibt es schon einen Web-Zugang." } } }
   $apiKey = New-RandomToken 32
-  $approvalToken = if ($isApprover) { New-RandomToken 24 } else { $null }
+  $webToken = if ($web) { New-RandomToken 24 } else { $null }
 
   $nu = [pscustomobject]@{ name = $name; apiKey = $apiKey; acmpUser = $(if ($acmpUser) { $acmpUser } else { $null }) }
   Set-CfgProp $cfg.mcp "users" (@($cfg.mcp.users | Where-Object { $_ }) + $nu)
-  if ($isApprover) {
-    $na = [pscustomobject]@{ name = $name; token = $approvalToken; email = $email }
+  if ($web) {
+    if (-not $cfg.web) { Set-CfgProp $cfg "web" ([pscustomobject]@{ publicUrl = (Get-PublicUrl $cfg); users = @() }) }
+    $nw = [pscustomobject]@{ name = $name; token = $webToken }
     # Nur anhaengen - vorhandene Eintraege bleiben unveraendert (auch unvollstaendige/Platzhalter)
-    Set-CfgProp $cfg.approval "approvers" (@($cfg.approval.approvers | Where-Object { $_ }) + $na)
+    Set-CfgProp $cfg.web "users" (@($cfg.web.users | Where-Object { $_ }) + $nw)
   }
   Save-AcmpConfig $cfg $cfgPath
-  [pscustomobject]@{ Name = $name; ApiKey = $apiKey; ApprovalToken = $approvalToken; AcmpUser = $acmpUser }
+  [pscustomobject]@{ Name = $name; ApiKey = $apiKey; WebToken = $webToken; AcmpUser = $acmpUser }
 }
 
 function Get-PublicUrl($cfg) {
-  $u = if ($cfg.approval -and $cfg.approval.publicUrl) { "$($cfg.approval.publicUrl)" } else { "http://127.0.0.1:$($cfg.mcp.httpPort)" }
+  $u = if ($cfg.web -and $cfg.web.publicUrl) { "$($cfg.web.publicUrl)" } elseif ($cfg.approval -and $cfg.approval.publicUrl) { "$($cfg.approval.publicUrl)" } else { "http://127.0.0.1:$($cfg.mcp.httpPort)" }
   $u.TrimEnd('/')
+}
+
+function Set-PublicUrl($cfg, [string]$url) {
+  if (-not $cfg.web) { Set-CfgProp $cfg "web" ([pscustomobject]@{ publicUrl = $url; users = @() }) } else { Set-CfgProp $cfg.web "publicUrl" $url }
+}
+
+# Version 2 (22.10.2026): keine Vier-Augen-Freigabe mehr. Stellt eine alte Config um: approval -> web (publicUrl, users) und
+# mcp.defaultRequester; approvalGate der Writer entfaellt. Die Web-Tokens bleiben gleich. Gibt $true zurueck, wenn etwas geaendert wurde.
+function Convert-ApprovalConfig($cfg) {
+  $changed = $false
+  if ($cfg.approval) {
+    $users = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($u in (Get-WebUsers $cfg)) { if (-not $seen.ContainsKey($u.name.ToLower())) { $seen[$u.name.ToLower()] = $true; [void]$users.Add([pscustomobject]@{ name = $u.name; token = $u.token }) } }
+    $url = Get-PublicUrl $cfg
+    Set-CfgProp $cfg "web" ([pscustomobject]@{ publicUrl = $url; users = @($users) })
+    if ($cfg.approval.requester -and -not $cfg.mcp.defaultRequester) { Set-CfgProp $cfg.mcp "defaultRequester" $cfg.approval.requester }
+    $cfg.PSObject.Properties.Remove("approval")
+    $changed = $true
+  }
+  foreach ($s in "ccWriter", "kioskWriter", "wumWriter", "unixWriter", "cfWriter", "jobWriter") {
+    if ($cfg.$s -and $cfg.$s.PSObject.Properties["approvalGate"]) { $cfg.$s.PSObject.Properties.Remove("approvalGate"); $changed = $true }
+  }
+  $changed
 }
 
 # ---------------------------------------------------------------- Dienst + Log
@@ -288,12 +319,11 @@ function Show-AccessSummary($user, [string]$publicUrl, [bool]$localOnly) {
   Write-Host "  Zugang fuer '$($user.Name)' - diese Werte werden NUR JETZT angezeigt:" -ForegroundColor Yellow
   Write-Host "    MCP-URL:        $publicUrl/" -ForegroundColor White
   Write-Host "    MCP-API-Key:    $($user.ApiKey)" -ForegroundColor White
-  if ($user.ApprovalToken) {
-    $q = "approver=" + [Uri]::EscapeDataString($user.Name) + "&token=" + [Uri]::EscapeDataString($user.ApprovalToken)
-    Write-Host "    Freigaben:      $publicUrl/approvals?$q" -ForegroundColor White
-    Write-Host "    Dashboard:      $publicUrl/dashboard?$q" -ForegroundColor White
-    Write-Host "    Onboarding:     $publicUrl/onboarding?$q" -ForegroundColor White
-    Write-Info "Die Links enthalten deinen persoenlichen Freigabe-Login - als Lesezeichen speichern, nicht weitergeben."
+  if ($user.WebToken) {
+    Write-Host "    Weboberflaeche: $publicUrl/login  (Uebersicht, Aktivitaet, Notbremse, Onboarding)" -ForegroundColor White
+    Write-Host "    Kurzname:       $($user.Name)" -ForegroundColor White
+    Write-Host "    Web-Token:      $($user.WebToken)" -ForegroundColor White
+    Write-Info "Der Web-Token ist dein persoenlicher Login fuer die Weboberflaeche - sicher aufbewahren (z.B. Passwort-Manager), nicht weitergeben."
   }
   if ($localOnly) { Write-Hint "Der Server ist noch NUR auf diesem Rechner erreichbar (127.0.0.1). Fuer andere PCs: .\set-network-admin.ps1" }
   if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {

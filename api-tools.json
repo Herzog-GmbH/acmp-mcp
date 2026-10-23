@@ -36,11 +36,11 @@
     "command": "GetClientId",
     "version": 1,
     "tier": "Read",
-    "description": "Loest eine ACMP-ClientId anhand von ComputerName, MacAddress oder MachineId auf.",
+    "description": "Loest eine ACMP-ClientId auf: nur mit computerName ueber die ACMP-Datenbank (aktive Clients), mit machineId UND macAddress ueber GetClientId der Public API (ACMP verlangt dort beide).",
     "args": [
-      { "name": "computerName", "xml": "ComputerName", "kind": "string", "required": false, "description": "Computername des Clients." },
-      { "name": "macAddress", "xml": "MacAddress", "kind": "string", "required": false, "description": "MAC-Adresse." },
-      { "name": "machineId", "xml": "MachineId", "kind": "string", "required": false, "description": "Machine-Id." }
+      { "name": "computerName", "xml": "ComputerName", "kind": "string", "required": false, "description": "Computername des Clients (allein genuegt, Suche in der DB)." },
+      { "name": "macAddress", "xml": "MacAddress", "kind": "string", "required": false, "description": "MAC-Adresse (nur zusammen mit machineId)." },
+      { "name": "machineId", "xml": "MachineId", "kind": "string", "required": false, "description": "Machine-Id des Agents, GUID (nur zusammen mit macAddress)." }
     ]
   }
 ]

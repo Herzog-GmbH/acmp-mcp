@@ -13,9 +13,9 @@
 //    IsFileRepoVersionIncreased) sind nicht beobachtet und werden abgelehnt, ebenso Folgeversionen ohne freigegebene Vorversion.
 // Regeln: eigene Entwuerfe (cc-drafts.json) und fremde Commands, deren neueste Version zuletzt der MCP gespeichert hat
 // (LastModifier "MCP ...", also acmp_cc_new_version) und die nicht in einem Aagon-Standardordner bzw. ausserhalb von
-// ccWriter.versionScopeFolderIds liegen; nur State 1; immer ueber die Vier-Augen-Freigabe (auch bei bypassAll, mind. eine
-// Zustimmung), Plan mit SHA-256 von Client-/Console-Skript und Dateien sowie den States aller Versionen eingefroren (hat sich seit
-// der Anfrage etwas geaendert, wird nichts freigegeben), Sicherung vor dem Schreiben, eine Transaktion je Auftrag, ein UPDATE je
+// ccWriter.versionScopeFolderIds liegen; nur State 1; erst dryRun (Vorschau),
+// Plan mit SHA-256 von Client-/Console-Skript und Dateien sowie den States aller Versionen (hat sich bis zum Schreiben
+// etwas geaendert, wird nichts freigegeben), Sicherung vor dem Schreiben, eine Transaktion je Auftrag, ein UPDATE je
 // Zeile (Update-Trigger). Platzhalter in Schritten (z.B. "HIER LIZENZSCHLUESSEL EINTRAGEN", "HIER_...") sperren die Freigabe.
 using System;
 using System.Collections.Generic;
@@ -328,7 +328,7 @@ partial class AcmpCcWriter
         try { rel = CcFormat.Decode(releasedClient); }
         catch (Exception ex) { l.Add("   Aenderungen gegenueber v" + releasedVersion + ": nicht vergleichbar (Client-Skript von v" + releasedVersion + " nicht lesbar: " + ex.Message + ") - Inhalt pruefen."); return l; }
         List<string> diff = DiffLines(DiffRender(rel), DiffRender(script), 2);
-        if (diff == null) l.Add("   Aenderungen gegenueber v" + releasedVersion + ": Skript zu gross fuer den Zeilenvergleich - Inhalt pruefen (details=true bzw. Freigabeseite).");
+        if (diff == null) l.Add("   Aenderungen gegenueber v" + releasedVersion + ": Skript zu gross fuer den Zeilenvergleich - Inhalt pruefen (details=true).");
         else if (diff.Count == 0) l.Add("   Aenderungen gegenueber der freigegebenen v" + releasedVersion + ": KEINE (Schritte und Variablen gleich).");
         else
         {
@@ -343,9 +343,9 @@ partial class AcmpCcWriter
         return l;
     }
 
-    // ================= Planen (dryRun und Freigabe-Anfrage) =================
+    // ================= Planen (dryRun und Ausfuehrung) =================
 
-    // withContent: Inhalt jedes Commands in die Vorschau (Freigabe-Anfrage immer; dryRun nur mit details=true, sonst kompakt fuer den Chat)
+    // withContent: Inhalt jedes Commands in die Vorschau (Ausfuehrung immer; dryRun nur mit details=true, sonst kompakt fuer den Chat)
     public JObject PlanRelease(JObject a, bool withContent)
     {
         if (string.IsNullOrEmpty(_readCs)) throw new Exception("DB-Lesezugang (db.connectionString) fehlt.");
@@ -400,7 +400,7 @@ partial class AcmpCcWriter
                 int rv = (int)s["releasedVersion"];
                 if (rv > 0) body.AddRange(ReleaseDiffLines(relBlob, script, rv));
                 JArray content = PreviewScript(new List<string>(), script);
-                if (!withContent) { body.Add("   Inhalt: " + content.Count + " Zeilen (Client-Skript, SHA-256 " + ((string)s["clientSha256"]).Substring(0, 16) + "...) - mit details=true bzw. auf der Freigabeseite"); continue; }
+                if (!withContent) { body.Add("   Inhalt: " + content.Count + " Zeilen (Client-Skript, SHA-256 " + ((string)s["clientSha256"]).Substring(0, 16) + "...) - mit details=true"); continue; }
                 body.Add("   Inhalt (Client-Skript, SHA-256 " + ((string)s["clientSha256"]).Substring(0, 16) + "...):");
                 int shown = 0;
                 foreach (JToken t in content)
@@ -411,7 +411,7 @@ partial class AcmpCcWriter
             }
             if (problems.Count > 0)
                 throw new Exception("Nichts geplant - " + problems.Count + " Command(s) koennen nicht freigegeben werden: " + string.Join(" | ", problems.ToArray()) +
-                    (items.Count > 0 ? " (die uebrigen " + items.Count + " waeren freigebbar; ohne die genannten erneut beantragen)" : ""));
+                    (items.Count > 0 ? " (die uebrigen " + items.Count + " waeren freigebbar; ohne die genannten erneut aufrufen)" : ""));
             if (items.Count == 0) throw new Exception("Nichts freizugeben - " + string.Join("; ", skipped.ToArray()) + ".");
             var p = new JObject();
             p["action"] = "release"; p["batchId"] = NewGuid(); p["items"] = items;
@@ -534,7 +534,7 @@ partial class AcmpCcWriter
         using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(b)).Replace("-", "");
     }
 
-    // ================= Ausfuehren (nur mit eingefrorenem Plan aus der Freigabe-Anfrage) =================
+    // ================= Ausfuehren (nur mit dem Plan, den der Server direkt vorher erstellt hat) =================
 
     public void CheckReleaseWrite(string requester)
     {
@@ -549,7 +549,7 @@ partial class AcmpCcWriter
         CheckReleaseWrite(requester);
         JObject p = a["_plan"] as JObject;
         if (p == null || (string)p["action"] != "release")
-            throw new Exception("acmp_cc_release laeuft nur ueber eine Freigabe-Anfrage mit eingefrorenem Plan - nichts freigegeben.");
+            throw new Exception("acmp_cc_release laeuft nur mit einem vom Server erstellten Plan - nichts freigegeben.");
         return ExecRelease(p, requester);
     }
 
@@ -570,7 +570,7 @@ partial class AcmpCcWriter
                 byte[] blob, relBlob;
                 JObject now = ReleaseSnapshot(c, null, id, true, out blob, out relBlob);
                 List<string> diff = ReleaseDiff(it, now);
-                if (diff.Count > 0) { problems.Add(label + " wurde seit der Anfrage geaendert (" + string.Join(", ", diff.ToArray()) + ")"); continue; }
+                if (diff.Count > 0) { problems.Add(label + " wurde seit der Planung geaendert (" + string.Join(", ", diff.ToArray()) + ")"); continue; }
                 CcScript script = null; string decodeError = null;
                 try { script = CcFormat.Decode(blob); } catch (Exception ex) { decodeError = ex.Message; }
                 bool registered = IsRegistered(id);
@@ -582,7 +582,7 @@ partial class AcmpCcWriter
                 if ((long)now["newFileRepoSize"] != (long)it["fileRepoSize"]) { problems.Add(label + ": Dateigroessen im File Repository haben sich geaendert"); continue; }
                 before.Add(now);
             }
-            if (problems.Count > 0) throw new Exception("Nichts freigegeben - " + string.Join(" | ", problems.ToArray()) + ". Bitte neu beantragen.");
+            if (problems.Count > 0) throw new Exception("Nichts freigegeben - " + string.Join(" | ", problems.ToArray()) + ". Bitte erneut aufrufen.");
             // 2) Sicherung der Werte, die sich aendern (plus Kennung des Inhalts)
             var b = new JObject();
             b["kind"] = "release"; b["batchId"] = p["batchId"]; b["zeit"] = DateTime.Now.ToString("s"); b["von"] = requester;

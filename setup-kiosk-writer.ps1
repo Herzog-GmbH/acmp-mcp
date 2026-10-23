@@ -58,7 +58,7 @@ $req = @($cfg.ccWriter.allowedRequesters | Where-Object { $_ })
 if (-not $req) { Write-Bad "ccWriter.allowedRequesters ist leer - zuerst .\setup-cc-writer.ps1 (oder -AddRequester)."; exit 1 }
 
 Write-Hint "Direktes Schreiben in die ACMP-Datenbank ist von Aagon nicht vorgesehen. Vorher die Datenbank sichern."
-Write-Info "Jede Kiosk-Aenderung braucht eine Zustimmung auf der Freigabe-Seite, vorher wird gesichert (acmp_kiosk_restore)."
+Write-Info "Jede Kiosk-Aenderung zeigt mit dryRun vorher eine Vorschau, wird gesichert (acmp_kiosk_restore) und steht im Aktivitaetsprotokoll."
 Write-Info ("Bediener mit Schreibrecht (aus ccWriter.allowedRequesters): " + ($req -join ", "))
 if (-not (Read-YesNo "Weiter?" $false)) { Write-Info "Abgebrochen - nichts geaendert."; exit 0 }
 
@@ -142,7 +142,7 @@ if (-not $cfg.kioskWriter) { $cfg | Add-Member -NotePropertyName kioskWriter -No
 $k = $cfg.kioskWriter
 Set-CfgProp $k "enabled" $true
 Set-CfgProp $k "allowedGroupIds" $sel
-Set-CfgProp $k "approvalGate" $true
+if ($k.PSObject.Properties["approvalGate"]) { $k.PSObject.Properties.Remove("approvalGate") }
 if (-not $k.PSObject.Properties["allowUntested"]) { Set-CfgProp $k "allowUntested" $false }
 Set-CfgProp $k "imageRepositoryDir" $(if ($ImageRepositoryDir) { $ImageRepositoryDir } else { "" })
 Set-CfgProp $k "imageSourceRoots" $ImageSourceRoots

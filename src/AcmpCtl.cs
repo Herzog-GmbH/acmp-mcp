@@ -3,9 +3,9 @@
 // globalen Account ({{GLOBAL_ACCOUNT_ID}}) und individuelle Felder ({{CF:<Feld>:<Eigenschaft>}}) einsetzen
 // -> AcmpCcWriter.BuildScript / CreateDraft.
 // Geschrieben wird ausschliesslich ueber AcmpCcWriter.CreateDraft und damit unter denselben Regeln
-// (allowedRequesters, allowedFolderIds, approvers, immer nur Entwurf, Freigabe in der Console).
+// (allowedRequesters, allowedFolderIds, immer nur Entwurf, freigeben mit acmp_cc_release oder in der Console).
 // Dateien (files): url (https, Download beim Hersteller) oder path (im Vorlagen-Ordner der Quelle), immer mit SHA-256.
-// Sie landen zuerst im Zwischenspeicher <cfgDir>\ctl-cache\<sha256> (schon beim dryRun bzw. der Freigabe-Anfrage),
+// Sie landen zuerst im Zwischenspeicher <cfgDir>\ctl-cache\<sha256> (schon beim dryRun),
 // erst nach dem Anlegen des Entwurfs haengt AcmpCcWriter.AddFileTrusted sie an (File Repository, Ordner private).
 using System;
 using System.Collections.Generic;
@@ -139,11 +139,11 @@ class AcmpCtl
         var left = new List<string>();
         FindPlaceholders(steps, left); FindPlaceholders(vars, left);
         if (left.Count > 0) throw new Exception("Nicht ersetzte Platzhalter: " + string.Join(", ", left.ToArray()) + ". Nichts angelegt.");
-        // Pruefsumme der aufgeloesten Schritte: bei einer Freigabe-Anfrage festgehalten, vor dem Schreiben verglichen
+        // Pruefsumme der aufgeloesten Schritte: ist _expectStepsHash gesetzt (nur serverseitig), wird vor dem Schreiben verglichen
         string stepsHash = Sha256Hex(steps.ToString(Formatting.None) + "|" + vars.ToString(Formatting.None));
         string expect = (string)a["_expectStepsHash"];
         if (!dry && !string.IsNullOrEmpty(expect) && expect != stepsHash)
-            throw new Exception("Die aufgeloesten Schritte weichen von der freigegebenen Vorschau ab (z.B. individuelles Feld geaendert). Nichts angelegt - bitte neu beantragen.");
+            throw new Exception("Die aufgeloesten Schritte weichen von der freigegebenen Vorschau ab (z.B. individuelles Feld geaendert). Nichts angelegt - bitte erneut aufrufen.");
 
         // Kopf-JSON der individuellen Felder aus den Schritten sammeln (wie die Console es fuer das Skript ablegt)
         string hCf = CollectStored(steps, "StoredCustomFields");
@@ -215,44 +215,6 @@ class AcmpCtl
         return res;
     }
 
-    // ================= Freigabe-Anfrage =================
-    // Vor der Vier-Augen-Freigabe: Vorlage laden und als Text einfrieren (spaetere Aenderungen an der Quelle wirken nicht),
-    // dryRun fuer die Vorschau, Pruefsumme der aufgeloesten Schritte festhalten. Liefert die eingefrorenen Argumente.
-    public JObject FreezeForApproval(JObject a, string requester, out JArray preview)
-    {
-        // Interne Felder setzt nur die Freigabe selbst (sonst koennte eine Anfrage z.B. eine vertrauenswuerdige Quelle vortaeuschen)
-        a = (JObject)a.DeepClone();
-        foreach (JProperty p in new List<JProperty>(a.Properties())) if (p.Name.StartsWith("_")) p.Remove();
-        string source, raw, baseLoc;
-        JObject tpl = LoadTemplate(a, out source, out raw, out baseLoc);
-        JArray fl = tpl["files"] as JArray;
-        if (fl != null && fl.Count > 0) _ccw.CheckWrite(requester, true);
-        var frozen = (JObject)a.DeepClone();
-        frozen.Remove("id"); frozen.Remove("dryRun");
-        frozen["template"] = raw;
-        frozen["_source"] = source;
-        if (baseLoc != null) frozen["_sourceBase"] = baseLoc;
-        var d = (JObject)frozen.DeepClone(); d["dryRun"] = true;
-        JObject dry = Install(d, requester);
-        frozen["_expectStepsHash"] = (string)dry["stepsHash"];
-        JObject info = dry["ctl"] as JObject;
-        var head = new List<string>();
-        head.Add("Vorlage " + (string)info["template"] + " (Status " + (string)info["status"] + ") als Entwurf \"" + (string)dry["name"] + "\" im Ordner \"" + (string)dry["folder"] + "\" anlegen.");
-        head.Add("Quelle: " + source + " | SHA-256 " + (string)info["sha256"]);
-        if (info["parameters"] is JObject) foreach (JProperty p in ((JObject)info["parameters"]).Properties()) head.Add("Parameter " + p.Name + " = " + (string)p.Value);
-        if (info["globalAccountId"] != null) head.Add("Globaler Account: " + (string)info["globalAccountId"]);
-        if (info["customFields"] is JObject)
-            foreach (JProperty p in ((JObject)info["customFields"]).Properties())
-                head.Add("Individuelles Feld " + p.Name + " -> " + (string)p.Value["folder"] + " > " + (string)p.Value["table"] + " " + (string)p.Value["fieldId"]);
-        if (info["files"] is JArray)
-            foreach (JToken f in (JArray)info["files"])
-                head.Add("Datei private\\" + (string)f["name"] + " (" + ((long)f["bytes"]).ToString("N0") + " Byte) von " + (string)f["origin"] + " | SHA-256 " + (string)f["sha256"] + " geprueft, wird nach dem Anlegen angehaengt");
-        if (dry["hinweise"] is JArray) foreach (JToken t in (JArray)dry["hinweise"]) head.Add("Hinweis: " + (string)t);
-        head.Add("Schritte:");
-        preview = AcmpCcWriter.PreviewSteps(head, dry["steps"] as JArray);
-        return frozen;
-    }
-
     // ================= Laden =================
 
     // baseLoc: Ordner bzw. https-Basis der Vorlage, gegen den files[].path aufgeloest wird (null = inline ohne Quelle)
@@ -262,7 +224,7 @@ class AcmpCtl
         if (inline != null && inline.Type != JTokenType.Null)
         {
             raw = inline.Type == JTokenType.String ? (string)inline : inline.ToString(Formatting.None);
-            source = a["_source"] != null ? (string)a["_source"] + " (bei der Freigabe-Anfrage eingefroren)" : "inline";
+            source = a["_source"] != null ? (string)a["_source"] + " (vom Server festgehalten)" : "inline";
             baseLoc = (string)a["_sourceBase"];
             return ParseTemplate(raw, "inline");
         }
@@ -646,7 +608,7 @@ class AcmpCtl
     // ================= Dateien =================
 
     // Holt jede Datei in den Zwischenspeicher <cacheDir>\<sha256> und prueft die Pruefsumme. Liegt sie dort schon
-    // (z.B. seit der Freigabe-Anfrage), wird nur nachgerechnet. Weicht eine Datei ab, wird abgebrochen - vor dem Anlegen.
+    // (z.B. seit dem dryRun), wird nur nachgerechnet. Weicht eine Datei ab, wird abgebrochen - vor dem Anlegen.
     List<CtlFile> FetchFiles(JArray fl, string baseLoc, List<string> notes)
     {
         Directory.CreateDirectory(_cacheDir);

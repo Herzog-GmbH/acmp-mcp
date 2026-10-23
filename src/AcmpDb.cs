@@ -146,7 +146,8 @@ class AcmpDb
                     if (has && int.TryParse(tok.ToString(), out iv)) pars.Add(new SqlParameter("@" + an, iv));
                     else if (def0 != null && int.TryParse(def0, out iv)) pars.Add(new SqlParameter("@" + an, iv));
                     else if (req) throw new Exception("Parameter '" + an + "' (Zahl) fehlt.");
-                    else pars.Add(new SqlParameter("@" + an, DBNull.Value));
+                    // typisiert, sonst kommt NULL als nvarchar an und z.B. "-@days" scheitert ("nvarchar ist fuer den minus-Operator ungueltig")
+                    else pars.Add(new SqlParameter("@" + an, System.Data.SqlDbType.Int) { Value = DBNull.Value });
                 }
                 else
                 {

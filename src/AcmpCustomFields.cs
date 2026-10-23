@@ -7,8 +7,8 @@
 // Die DDL fuehrt der Schreib-Login nicht selbst aus: zwei Prozeduren im Besitz von dbo mit EXECUTE AS OWNER (grant-cf-params.sql) bauen genau
 // dieses Muster aus den GUIDs. Der Schreib-Login hat nur EXECUTE darauf und SELECT/INSERT auf die drei Metadaten-Objekte.
 // Regeln: nur Client-Tabellen (Abfragebasis Clients, Ordner unter Client\Custom Fields), keine Mehrfachtabellen, nur Ganzzahl und Text (die
-// Metadaten anderer Eingabemethoden sind nicht beobachtet), hoechstens MaxFields Felder je Auftrag, Namen in der Tabelle eindeutig, immer ueber
-// die Vier-Augen-Freigabe, Plan mit Ids eingefroren, eine Transaktion, Sicherung des Plans, Kontrolle danach mit dem Lese-Login.
+// Metadaten anderer Eingabemethoden sind nicht beobachtet), hoechstens MaxFields Felder je Auftrag, Namen in der Tabelle eindeutig, erst
+// dryRun (Vorschau), Plan mit Ids, eine Transaktion, Sicherung des Plans, Kontrolle danach mit dem Lese-Login.
 // Loeschen kann das Tool nicht (in der Console). Ob der ACMP-Server ein so angelegtes Feld ohne Neustart kennt (er haelt die Felder im
 // Speicher und liest sie nach Aktionen der Console neu), zeigt der erste Lauf eines Commands mit "Wert auf Server speichern".
 using System;
@@ -64,7 +64,6 @@ class AcmpCustomFields
 
     public bool ConfigOk { get; private set; }
     public string DisabledReason { get; private set; }
-    public bool ApprovalGate { get; private set; }
     public ICollection<string> AllowedRequesters { get { return _allowedReq; } }
 
     public AcmpCustomFields(string readCs, JObject cfg, JObject ccCfg, string cfgDir, Action<string> log, Func<string> acmpVersion)
@@ -72,8 +71,6 @@ class AcmpCustomFields
         _readCs = readCs; _log = log; _acmpVersion = acmpVersion;
         string bd = cfg != null && cfg["backupDir"] != null ? (string)cfg["backupDir"] : "cf-backups";
         _backupDir = Path.IsPathRooted(bd) ? bd : Path.Combine(cfgDir, bd);
-        JToken gate = cfg != null && cfg["approvalGate"] != null ? cfg["approvalGate"] : (ccCfg != null ? ccCfg["approvalGate"] : null);
-        ApprovalGate = gate == null || (bool)gate;
         _allowUntested = cfg != null && cfg["allowUntested"] != null && (bool)cfg["allowUntested"];
         if (cfg == null || cfg["enabled"] == null || !(bool)cfg["enabled"]) { DisabledReason = "cfWriter.enabled ist nicht true (nur Lesen und dryRun)"; return; }
         _writeCs = cfg["connectionString"] != null ? (string)cfg["connectionString"] : (ccCfg != null ? (string)ccCfg["connectionString"] : null);
@@ -477,7 +474,6 @@ class AcmpCustomFields
         if (!ConfigOk) { o["status"] = "aus"; o["reason"] = DisabledReason; return o; }
         JObject pf = Preflight(refresh);
         o["status"] = (bool)pf["ok"] ? "aktiv" : "gesperrt";
-        o["approvalGate"] = ApprovalGate;
         o["allowedRequesters"] = new JArray(new List<string>(_allowedReq).ToArray());
         o["createTool"] = pf["createTool"];
         o["vorpruefung"] = pf;
@@ -487,7 +483,6 @@ class AcmpCustomFields
     public void CheckWrite(string requester)
     {
         if (!ConfigOk) throw new Exception("Individuelle Felder anlegen ist ausgeschaltet: " + DisabledReason);
-        if (!ApprovalGate) throw new Exception("acmp_cf_create laeuft nur ueber die Vier-Augen-Freigabe (cfWriter.approvalGate bzw. ccWriter.approvalGate ist aus) - nichts geschrieben. Sonst in der ACMP-Console anlegen.");
         if (requester == null || !_allowedReq.Contains(requester)) throw new Exception("Antragsteller '" + requester + "' darf keine individuellen Felder anlegen (cfWriter.allowedRequesters).");
         JObject pf = Preflight(false);
         if (pf == null || !(bool)pf["ok"]) throw new Exception("Individuelle Felder anlegen gesperrt - Vorpruefung nicht bestanden: " + (pf != null ? (string)pf["summary"] : "keine Pruefung") + " (Details: acmp_cf_list status=true). Nichts geschrieben.");
@@ -854,7 +849,7 @@ class AcmpCustomFields
     {
         CheckWrite(requester);
         JObject p = a["_plan"] as JObject;
-        if (p == null || (string)p["action"] != "cfcreate") throw new Exception("acmp_cf_create schreibt nur mit dem eingefrorenen Plan aus der Vier-Augen-Freigabe - nichts geschrieben.");
+        if (p == null || (string)p["action"] != "cfcreate") throw new Exception("acmp_cf_create schreibt nur mit einem vom Server erstellten Plan - nichts geschrieben.");
         lock (_wLock) { return Exec(p, requester); }
     }
 
@@ -870,7 +865,7 @@ class AcmpCustomFields
         bool physical = Convert.ToInt32(cq.ExecuteScalar()) > 0;
         if ((bool)tj["new"])
         {
-            if (tables.ContainsKey(tid) || physical) throw new Exception("Tabelle " + tj["name"] + " gibt es inzwischen - nichts geschrieben, bitte neu beantragen.");
+            if (tables.ContainsKey(tid) || physical) throw new Exception("Tabelle " + tj["name"] + " gibt es inzwischen - nichts geschrieben, bitte erneut aufrufen.");
             foreach (CfTable x in tables.Values)
                 if (string.Equals(x.FolderId, (string)tj["folderId"], StringComparison.OrdinalIgnoreCase) && string.Equals(x.Caption, (string)tj["caption"], StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Im Ordner gibt es inzwischen eine Tabelle \"" + tj["caption"] + "\" - nichts geschrieben.");
@@ -885,7 +880,7 @@ class AcmpCustomFields
         var now = new List<string>(); foreach (CfMeta m in all) if (string.Equals(m.TableId, tid, StringComparison.OrdinalIgnoreCase)) now.Add(m.FieldId);
         now.Sort(StringComparer.OrdinalIgnoreCase);
         var planned = new List<string>(); foreach (JToken x in (JArray)p["existingFieldIds"]) planned.Add((string)x);
-        if (string.Join("|", now.ToArray()) != string.Join("|", planned.ToArray())) throw new Exception("Die Felder der Tabelle \"" + tj["caption"] + "\" haben sich seit der Anfrage geaendert - nichts geschrieben, bitte neu beantragen.");
+        if (string.Join("|", now.ToArray()) != string.Join("|", planned.ToArray())) throw new Exception("Die Felder der Tabelle \"" + tj["caption"] + "\" haben sich seit der Planung geaendert - nichts geschrieben, bitte erneut aufrufen.");
         foreach (JObject f in (JArray)p["fields"])
             if (all.Exists(m => string.Equals(m.FieldId, (string)f["id"], StringComparison.OrdinalIgnoreCase))) throw new Exception("Feld-Id " + f["id"] + " ist schon vergeben - nichts geschrieben.");
     }
