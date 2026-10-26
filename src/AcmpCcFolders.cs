@@ -766,7 +766,7 @@ partial class AcmpCcWriter
             : plan.Count + " neue Client-Command-Ordner anlegen (Standard-Ordnersymbol) - eine Transaktion, in dieser Reihenfolge:");
         head.AddRange(lines);
         head.Add("Rechte je Ordner wie der Elternordner. Die Console nimmt beim Anlegen zusaetzlich den angemeldeten Benutzer auf; das passiert hier nicht.");
-        head.Add("Umbenennen/Verschieben: acmp_cc_update_folder ; Loeschen in der ACMP-Console. Danach in der Console Aktualisieren (F5).");
+        head.Add("Umbenennen/Verschieben: acmp_cc_update_folder ; leere Ordner loeschen: acmp_cc_delete_folder. Danach in der Console Aktualisieren (F5).");
         p["vorschau"] = new JArray(head.ToArray());
         return p;
     }
@@ -1008,12 +1008,12 @@ partial class AcmpCcWriter
         {
             string id = (string)fl[0]["folderId"];
             o["result"] = "Ordner angelegt."; o["folderId"] = id; o["path"] = fl[0]["path"]; o["rechteEintraege"] = aclFirst;
-            o["hinweis"] = "In der Console Aktualisieren (F5). Verschieben hinein: acmp_cc_move folder=\"" + id + "\". Umbenennen/verschieben: acmp_cc_update_folder ; Loeschen in der Console.";
+            o["hinweis"] = "In der Console Aktualisieren (F5). Verschieben hinein: acmp_cc_move folder=\"" + id + "\". Umbenennen/verschieben: acmp_cc_update_folder ; leere Ordner loeschen: acmp_cc_delete_folder.";
         }
         else
         {
             o["result"] = fl.Count + " Ordner angelegt (" + aclTotal + " Rechte-Eintraege, je Ordner wie der Elternordner).";
-            o["hinweis"] = "In der Console Aktualisieren (F5). GUIDs und Baum: acmp_cc_folders. Umbenennen/verschieben: acmp_cc_update_folder ; Loeschen in der Console.";
+            o["hinweis"] = "In der Console Aktualisieren (F5). GUIDs und Baum: acmp_cc_folders. Umbenennen/verschieben: acmp_cc_update_folder ; leere Ordner loeschen: acmp_cc_delete_folder.";
             o["ordner"] = ShortList(done, " (acmp_cc_folders zeigt alle)");
         }
         return o;

@@ -112,14 +112,20 @@ Sichtbarkeitsfilter nach AD-Gruppe, OU oder Benutzer löst der Server im Active 
 Ausschalten: `.\setup-kiosk-writer.ps1 -Disable`.
 
 ### Weitere Schreib-Tools (Windows-Updates, Unix Scripts, individuelle Felder, Jobs)
-Vier weitere Funktionen schreiben direkt in die ACMP-Datenbank, weil die Public API sie nicht kennt. Lesen geht bei allen schon mit den DB-Report-Tools: `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_unix_results`, `acmp_cf_list`, `acmp_jobs`, `acmp_get_jobs`.
+Vier weitere Funktionen schreiben direkt in die ACMP-Datenbank, weil die Public API sie nicht kennt. Lesen geht bei allen schon mit den DB-Report-Tools: `acmp_wum_declined`, `acmp_wum_rings`, `acmp_unix_scripts`, `acmp_unix_results`, `acmp_cf_list`, `acmp_jobs`, `acmp_get_jobs`, `acmp_job_log`, `acmp_container_filter`, `acmp_msw_packages`, `acmp_msw_package`, `acmp_msw_client`, `acmp_maintenance_windows`, `acmp_security_profiles`.
 
 | Funktion | Tools | Rechte | Config |
 |---|---|---|---|
 | Windows-Updates ablehnen | `acmp_wum_decline`, `acmp_wum_restore` | `grant-wum-writer.sql` | `wumWriter` |
+| Fehler-Stopp im Testring | `acmp_wum_ring_hold`, `acmp_wum_ring_release`, Update-Wächter | zusätzlich `grant-wum-rings.sql` | `wumWriter`, `wumWatch` |
 | Unix Scripts schreiben (ab ACMP 6.10) | `acmp_unix_script_create`, `_new_version`, `_set_ring` | `grant-unix-writer.sql` | `unixWriter` |
 | Individuelle Felder anlegen | `acmp_cf_create` | `grant-cf-params.sql` | `cfWriter` |
 | Jobs schalten, löschen, Startbedingung, Client-Beschränkung | `acmp_job_set_enabled`, `_set_condition`, `_delete`, `_restore`, `acmp_container_set_restriction` | `grant-jobs-writer.sql`, für die Client-Beschränkung zusätzlich `grant-jobs-writer2.sql` | `jobWriter` |
+| Container-Filter | `acmp_container_set_filter` | zusätzlich `grant-container-filter.sql` | `jobWriter` |
+| Managed Software, Client Command als Dauerauftrag | `acmp_msw_subscribe`, `acmp_msw_job_create`, `acmp_msw_test_install`, `acmp_job_create`, `acmp_job_delete` für einmalige Jobs | zusätzlich `grant-msw-writer.sql` | `jobWriter` |
+| Löschen, Wartungsfenster, Sicherheitsprofile, Agentenplaner | `acmp_cc_delete`, `acmp_cc_delete_folder`, `acmp_kiosk_delete_group`, `acmp_unix_script_delete`, `acmp_maintenance_window_create`, `_assign`, `_delete`, `acmp_container_security_profile`, `acmp_agent_template_assign` | zusätzlich `grant-luecken-writer.sql` | `jobWriter` |
+
+Die zusätzlichen Rechte sind optional: Fehlen sie, bleiben nur die Tools dieser Zeile gesperrt, die Vorschau mit `dryRun` geht trotzdem.
 
 > **Achtung:** Wie beim CC-Writer ist das von Aagon nicht vorgesehen. Sichert vorher die Datenbank. Alle vier sind standardmäßig aus.
 
@@ -130,6 +136,8 @@ Für alle vier gilt:
 - Vorher wird gesichert bzw. protokolliert (`wum-backups\`, `unix-backups\`, `cf-backups\`, `jobs-backups\`).
 
 **Windows-Updates ablehnen.** Der Server lehnt Updates über die ACMP-eigene Prozedur `ap_Wum_DeclineUpdates` ab, wie „Ablehnen“ in der Konsole, und baut danach die Flags neu auf. Abgelehnte Updates bekommen die Clients nicht mehr angeboten, bereits installierte bleiben. Höchstens 10 Updates je Auftrag, nur per Update-Id, mit Pflicht-Kommentar. Abgelöste, abgelaufene und widerrufene Updates lehnt er nicht ab. `acmp_wum_restore` hebt eine Ablehnung wieder auf. Die nächtlichen Ablehnungen des ACMP-Bereinigungsjobs („Autodeclined by Cleanupjob …“) blendet `acmp_wum_declined` standardmäßig aus (`includeAuto: true` zeigt sie).
+
+**Fehler-Stopp im Testring.** `acmp_wum_ring_hold` schaltet für ein Update den automatischen Übergang in den Freigabering aus, wie „Automatischen Übergangsmodus deaktivieren“ in der Konsole (`SYS_TestRings.TransitionMode = 0`). `acmp_wum_ring_release` schaltet ihn wieder ein oder gibt das Update sofort frei (Ring 255, danach Flags neu). Dafür braucht der Login nur zusätzlich `UPDATE` auf die Spalte `TransitionMode` (`grant-wum-rings.sql`). Der **Update-Wächter** (`wumWatch`, standardmäßig aus) wendet die Regeln aus [`USAGE.md`](USAGE.md#fehler-stopp-der-windows-updates) im Server regelmäßig an: Startet mit `mode: report` (nur melden, auf `/dashboard/updates` und als offene Punkte), erst nach ein paar Tagen Beobachtung `mode: hold`. Für die Sammel-Mail tragt ihr unter `wumWatch.mail` einen SMTP-Server ein, der ohne Anmeldung annimmt (z. B. euer interner Relay), Absender und Empfänger. Testrechner sind die Mitglieder von Containern mit einem WUM-Job, dessen Verteilungsring unter 255 liegt.
 
 **Unix Scripts.** Der Server legt Skripte und Versionen nur neu an, wie „Unix Script hinzufügen“ bzw. „Version hinzufügen“ in der Konsole. Neue Versionen landen in Testring 1, freigegeben wird mit `acmp_unix_script_set_ring` und `ring: 255`. Vorhandene Versionen ändert oder löscht er nicht. Mit `unixWriter.allowedFolderIds` begrenzt ihr das Schreiben auf bestimmte Unix-Script-Ordner. Die Skripte laufen auf den Clients **als root**.
 - Einen Unix-Job **starten** kann der MCP nicht, ACMP hat dafür weder API noch Job Collection. Das macht ihr in der Konsole: Container oder Abfrage → „Unix-Jobs ausführen“. Danach liest `acmp_unix_results` die Ausgabe je Client.
@@ -145,16 +153,29 @@ Für alle vier gilt:
 - `acmp_container_set_restriction` setzt nur die Client-Beschränkung eines Containers (nur Clients seiner Betriebssystemfamilie oder alle). Die Vorschau nennt die Mitglieder, die dann herausfallen; wirksam wird das bei der nächsten Container-Neuberechnung des ACMP-Servers.
 - `acmp_job_restore` nimmt jede dieser Änderungen aus der Sicherung zurück, solange seitdem nichts geändert wurde.
 
-Höchstens 10 Jobs je Auftrag, nur Daueraufträge (keine einmaligen Jobs, keine Agentenplaner-Scanner; die zeigt `acmp_agent_tasks`). In der Konsole bleiben: Jobs anlegen bzw. Commands an Container hängen, die Betriebssystemfamilie eines Containers, Agentenplaner-Aufgaben, Berichte und Profile löschen, Jobs mit mehreren Vorlagen löschen.
+Höchstens 10 Jobs je Auftrag. `acmp_job_set_enabled` schaltet auch die Scanner einer Agentenplaner-Vorlage (`acmp_agent_tasks`), `acmp_job_delete` löscht auch einmalige Jobs wie „Löschen“ im Job-Monitor (mit `grant-msw-writer.sql`).
+
+**Container-Filter.** `acmp_container_set_filter` schreibt wie die Konsole beim Speichern im Reiter „Dyn. Filter“ das SQL in `CLT_CONTAINER_STRUCTURE.SQLFilter` und die Definition in `SYS_Queries_FilterContainer`. Das SQL baut der Server so, wie es die Konsole baut (an echten Filtern zeichengleich geprüft). Er ändert nur Filter, die er genauso nachbauen kann: Kriterien der obersten Gruppe (UND, ODER, AUSSER) und höchstens eine Untergruppe; Text-, Ja/Nein-, Zahl- und IP-Kriterien. Vorher führt er den neuen Filter lesend aus und zeigt, welche Rechner dazukommen oder wegfallen. Die Mitglieder rechnet der ACMP-Server bei der nächsten Container-Neuberechnung neu (bzw. je Rechner beim Agentenkontakt); die Client-Beschränkung des Containers gilt dabei weiter.
+
+**Managed Software und neue Daueraufträge.** `acmp_msw_job_create` und `acmp_job_create` legen einen Dauerauftrag an einem Container an wie die Konsole beim Speichern: Job-Vorlage des Containers, Job, Job-Monitor-Eintrag und Verknüpfungen in einer Transaktion. `acmp_job_create` nimmt nur Client Commands ohne Parameter, weil nicht belegt ist, wie die Konsole Parameterwerte im Job ablegt. `acmp_msw_test_install` gibt ein Paket einmalig an 1–5 Clients wie „Managed Software zuweisen“, `acmp_msw_subscribe` abonniert über die ACMP-eigene Prozedur `ap_ManagedSoftware_Subscribe` (die Lizenzprüfung der Konsole für Evaluationspakete läuft dabei nicht). Den sofortigen Anstoß an die Agents kann der MCP nicht auslösen: Ein Agent holt einen neuen Auftrag bei seiner nächsten Job-Abfrage (Agentenstart, regelmäßige Abfrage).
+
+**Löschen, Wartungsfenster, Sicherheitsprofile, Agentenplaner.** Diese Tools bilden je einen SQL-Mitschnitt der Konsole 6.10 nach. Vor dem Schreiben sichern sie alle betroffenen Zeilen (auch die, die ACMP-Trigger und Kaskaden ändern), nach dem Schreiben noch einmal; `acmp_job_restore` legt den alten Stand zurück, solange niemand die Zeilen inzwischen geändert hat. Abgelehnt werden: Client Commands mit Daueraufträgen (erst `acmp_job_delete`), in Aagon-Standardordnern oder gerade in der Konsole geöffnet, die Vorlagen des MCP selbst (`runPowershell.clientCommandId`, `ccWriter.templateScriptId`), nicht leere Ordner, Wartungsprofile, die noch einem Container zugeordnet sind. Ein BitLocker- oder Defender-Profil an einem Container setzen die Agents auf **allen** Mitgliedern um, Ziel und Profil also vorher genau prüfen.
+
+In der Konsole bleiben: die Betriebssystemfamilie eines Containers, Agentenplaner-Aufgaben selbst anlegen, Berichte, Jobs mit mehreren Vorlagen löschen, Unix-Jobs starten.
 
 Einrichten:
 1. **CC-Writer** einrichten (siehe oben).
 2. **Datenbank sichern.**
-3. **Rechte:** je Funktion das SQL als SQL-Admin ausführen: `grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql` bzw. `grant-jobs-writer.sql` (für die Client-Beschränkung zusätzlich `grant-jobs-writer2.sql`). Abschnitt 1 zeigt jeweils vorher Trigger und Benutzer, die Kontrolle am Ende die wirksamen Rechte.
+3. **Rechte:** je Funktion das SQL als SQL-Admin ausführen: `grant-wum-writer.sql`, `grant-unix-writer.sql`, `grant-cf-params.sql` bzw. `grant-jobs-writer.sql`, dazu nach Bedarf die zusätzlichen aus der Tabelle oben (`grant-jobs-writer2.sql`, `grant-wum-rings.sql`, `grant-container-filter.sql`, `grant-msw-writer.sql`, `grant-luecken-writer.sql` – in dieser Reihenfolge). Abschnitt 1 zeigt jeweils vorher Trigger und Benutzer, die Kontrolle am Ende die wirksamen Rechte. Zeigt Abschnitt 1 andere Trigger als erwartet, nicht weitermachen.
 4. **Einrichten** als Administrator: `.\setup-extra-writers.ps1` im Installationsordner, oder `install.ps1` → Schritt „Optionale Funktionen“. Das Skript fragt je Funktion nach, prüft die Rechte des Schreib-Logins und schaltet nur ein, was vollständig ist. Mit `-Features wum,unix,cf,jobs` ohne Rückfrage, Unix-Ordner mit `-UnixFolderIds`.
 5. **Prüfen:** im MCP-Client `acmp_wum_declined`, `acmp_unix_scripts`, `acmp_cf_list` bzw. `acmp_jobs` jeweils mit `status: true`. Die Vorprüfung muss bestanden sein.
 
 Ausschalten: `.\setup-extra-writers.ps1 -Disable` (alle) oder mit `-Features` nur einzelne.
+
+### Lagebild, offene Punkte, Berichte per Mail
+- **Lagebild** (`/dashboard`, `/dashboard/rollout`): braucht nur `db.connectionString`. Die Schwellen stehen optional im Abschnitt `dashboard` (siehe `config.example.json`), ohne ihn gelten die Standardwerte. Abgefragt wird nur, wenn jemand die Seite öffnet, mit Zwischenspeicher (`cacheMinutes`).
+- **Offene Punkte** (`acmp_open_items`, `acmp_open_item_set`, Formular im Dashboard): braucht keine Einrichtung. Die Liste liegt als `offene-punkte.json` im Installationsordner.
+- **Berichte per Mail** (`acmp_send_report`): Der ACMP-Server erzeugt einen Bericht der Konsole und verschickt ihn über seine eigenen Mail-Einstellungen. Erlaubt sind nur Empfänger aus `reports.allowedMailDomains`; ohne Eintrag bleibt das Tool aus. Hängt eine Mail, zeigt `acmp_mail_queue` den Grund.
 
 ### Aktivitätsprotokoll und Notbremse
 Braucht keine Einrichtung. Das Protokoll liegt als `activity-JJJJ-MM.jsonl` im Installationsordner, die Notbremse als `notbremse.json`; beides seht ihr auf der Weboberfläche unter `/activity` und `/settings`. Die E-Mail-Benachrichtigung aus Version 1 (`approval.notify`) gibt es nicht mehr.

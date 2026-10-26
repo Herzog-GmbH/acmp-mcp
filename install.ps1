@@ -82,7 +82,7 @@ icacls $InstallDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:
 Write-Ok "$InstallDir (Inhalte nur fuer Administratoren und SYSTEM - dort liegen spaeter Zugangsdaten)"
 $sameDir = (Resolve-Path $repo).Path.TrimEnd('\') -eq (Resolve-Path $InstallDir).Path.TrimEnd('\')
 if (-not $sameDir) {
-  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","grant-jobs-writer.sql","grant-jobs-writer2.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1","renew-web-tokens.ps1") {
+  foreach ($f in "api-tools.json","db-tools.json","config.example.json","grant-db-readonly.sql","grant-cc-writer.sql","grant-kiosk-writer.sql","grant-wum-writer.sql","grant-unix-writer.sql","grant-cf-params.sql","grant-jobs-writer.sql","grant-jobs-writer2.sql","grant-wum-rings.sql","grant-container-filter.sql","grant-msw-writer.sql","grant-luecken-writer.sql","wizard-lib.ps1","add-user.ps1","update-admin.ps1","uninstall-admin.ps1","setup-admin.ps1","set-network-admin.ps1","setup-cc-writer.ps1","setup-kiosk-writer.ps1","setup-extra-writers.ps1","renew-web-tokens.ps1") {
     Copy-Item (Join-Path $repo $f) $InstallDir -Force
   }
   New-Item -ItemType Directory -Force (Join-Path $InstallDir "docs") | Out-Null
@@ -251,10 +251,11 @@ if ($ask) {
   }
   $extraActive = @("wumWriter","unixWriter","cfWriter","jobWriter" | Where-Object { $cfg.$_ -and $cfg.$_.enabled })
   if ($extraActive.Count -eq 4) { Write-Ok "Weitere Schreib-Tools aktiv (Windows-Updates, Unix Scripts, individuelle Felder, Jobs)" }
-  elseif ($ccNow -and (Read-YesNo "Weitere Schreib-Tools: Windows-Updates ablehnen, Unix Scripts schreiben, individuelle Felder anlegen, Jobs schalten? Von Aagon nicht vorgesehen" $false)) {
+  elseif ($ccNow -and (Read-YesNo "Weitere Schreib-Tools: Windows-Updates ablehnen/anhalten, Unix Scripts, individuelle Felder, Jobs, Managed Software, Container-Filter, Loeschen? Von Aagon nicht vorgesehen" $false)) {
     Write-Info "Vorbereitung (docs\ACMP-VORBEREITUNG.md > 'Weitere Schreib-Tools'):"
     Write-Info "  1. Datenbank sichern"
-    Write-Info "  2. je Funktion das SQL als SQL-Admin ausfuehren: grant-wum-writer.sql, grant-unix-writer.sql, grant-cf-params.sql, grant-jobs-writer.sql (+2)"
+    Write-Info "  2. je Funktion das SQL als SQL-Admin ausfuehren: grant-wum-writer.sql, grant-unix-writer.sql, grant-cf-params.sql, grant-jobs-writer.sql"
+    Write-Info "     optional dazu: grant-jobs-writer2.sql, grant-wum-rings.sql, grant-container-filter.sql, grant-msw-writer.sql, grant-luecken-writer.sql"
     if (Read-YesNo "Ist das erledigt? Dann jetzt setup-extra-writers.ps1 starten (fragt je Funktion nach)" $false) {
       if ($changed) { Save-AcmpConfig $cfg $cfgPath; $changed = $false }
       try { & (Join-Path $InstallDir "setup-extra-writers.ps1") -NoRestart } catch { Write-Bad "setup-extra-writers.ps1: $($_.Exception.Message)" }

@@ -66,11 +66,25 @@
   },
 
   "wumWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Windows-Updates der ACMP-Update-Verwaltung ablehnen und die Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore), erst dryRun, dann direkt, hoechstens 10 Updates je Auftrag, Pflicht-Kommentar. Lesen (acmp_wum_declined) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-wum-writer.sql). rebuildFlags: nach dem Schreiben das Flag IsDeclined sofort neu aufbauen (sonst beim naechsten Lauf von ACMP). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_wum_declined mit status=true.",
+    "_hinweis": "Optional, standardmaessig AUS. Windows-Updates der ACMP-Update-Verwaltung ablehnen und die Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore), erst dryRun, dann direkt, hoechstens 10 Updates je Auftrag, Pflicht-Kommentar. Dazu der Fehler-Stopp der Verteilungsringe: Uebergang anhalten, weiterlaufen lassen oder sofort freigeben (acmp_wum_ring_hold, acmp_wum_ring_release, zusaetzliche Rechte: grant-wum-rings.sql). Lesen (acmp_wum_declined, acmp_wum_rings, acmp_wum_update_clients) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-wum-writer.sql). rebuildFlags: nach dem Schreiben das Flag IsDeclined sofort neu aufbauen (sonst beim naechsten Lauf von ACMP). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_wum_declined mit status=true bzw. acmp_wum_rings mit writerStatus=true.",
     "enabled": false,
     "allowUntested": false,
     "rebuildFlags": true,
     "backupDir": "wum-backups"
+  },
+
+  "wumWatch": {
+    "_hinweis": "Optional, standardmaessig AUS. Update-Waechter des Fehler-Stopps: laeuft im Server alle intervalMinutes, haelt ein Windows-Update im Testring an, wenn es auf einem Testrechner (Mitglied eines Containers mit WUM-Job, Ring < 255) mit einem echten Fehler scheitert (S1) oder kurz vor der Weitergabe noch auf keinem Testrechner installiert ist (S2), meldet Rechnerdefekte und Fehler nach der Freigabe, legt offene Punkte an und zeigt alles auf /dashboard/updates. mode: report = nur melden (empfohlener Start), hold = auch anhalten (braucht wumWriter mit grant-wum-rings.sql). mail (optional): eine Sammel-Mail je Lauf ueber smtpHost an to. Schwellen (optional): hoursBeforeDue 24, stuckDays 3, defectDays 14, defectMinUpdates 3, postReleaseDays 7, postReleaseMinClients 3, transientPatterns (Liste von Textmustern fuer voruebergehende Fehler). Regeln: docs/USAGE.md, Abschnitt 'Fehler-Stopp der Windows-Updates'. Zustand in wum-waechter.json.",
+    "enabled": false,
+    "mode": "report",
+    "intervalMinutes": 60,
+    "firstDelayMinutes": 3,
+    "mail": {
+      "smtpHost": "",
+      "port": 25,
+      "from": "",
+      "to": []
+    }
   },
 
   "unixWriter": {
@@ -89,14 +103,33 @@
   },
 
   "jobWriter": {
-    "_hinweis": "Optional, standardmaessig AUS. Dauerauftraege (Jobs an Containern) abschalten, einschalten, loeschen und zuruecknehmen, die Startbedingung eines Containers setzen und seine Client-Beschraenkung (acmp_job_set_enabled, acmp_job_set_condition, acmp_job_delete, acmp_job_restore, acmp_container_set_restriction), erst dryRun, dann direkt, hoechstens 10 Jobs je Auftrag, Sicherung vorher. Lesen (acmp_jobs, acmp_get_jobs) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-jobs-writer.sql, fuer die Client-Beschraenkung zusaetzlich grant-jobs-writer2.sql). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_jobs mit status=true.",
+    "_hinweis": "Optional, standardmaessig AUS. Dauerauftraege (Jobs an Containern) abschalten, einschalten, loeschen und zuruecknehmen, die Startbedingung eines Containers setzen und seine Client-Beschraenkung (acmp_job_set_enabled, acmp_job_set_condition, acmp_job_delete, acmp_job_restore, acmp_container_set_restriction), erst dryRun, dann direkt, hoechstens 10 Jobs je Auftrag, Sicherung vorher. Lesen (acmp_jobs, acmp_get_jobs, acmp_job_log, acmp_container_filter, acmp_msw_packages ...) braucht nur db.connectionString. Nutzt Schreib-Login und allowedRequesters des CC-Writers, solange hier keine eigenen stehen (Rechte: grant-jobs-writer.sql, fuer die Client-Beschraenkung zusaetzlich grant-jobs-writer2.sql). Weitere Tools mit eigenen, optionalen Rechten: Container-Filter (acmp_container_set_filter, grant-container-filter.sql), Managed Software und Client Command als Dauerauftrag (acmp_msw_job_create, acmp_msw_test_install, acmp_msw_subscribe, acmp_job_create, grant-msw-writer.sql), Loeschen, Wartungsfenster, Sicherheitsprofile und Agentenplaner (acmp_cc_delete, acmp_cc_delete_folder, acmp_kiosk_delete_group, acmp_unix_script_delete, acmp_maintenance_window_create/_assign/_delete, acmp_container_security_profile, acmp_agent_template_assign, grant-luecken-writer.sql). Einrichten mit setup-extra-writers.ps1 (als Admin), Pruefung: acmp_jobs mit status=true.",
     "enabled": false,
     "allowUntested": false,
     "backupDir": "jobs-backups"
   },
 
+  "reports": {
+    "_hinweis": "Optional. acmp_send_report verschickt ACMP-Berichte per Mail ueber den ACMP-Server, aber nur an Adressen in diesen Domains (z.B. [\"example.com\"]). Leer = Tool aus.",
+    "allowedMailDomains": []
+  },
+
+  "dashboard": {
+    "_hinweis": "Optional, alle Werte haben Standards. Schwellen fuer das Lagebild der Startseite (/dashboard): cacheMinutes (Zwischenspeicher), offlineDays (Clients ohne Kontakt), minFreeGB/minFreePct (Platz auf Clients), serverMinFreePct, critFreeGB/critFreePct (kritisch), scanDays (Inventar-/Schwachstellen-Scan zu alt), jobErrorRatePct/jobErrorMin (Jobs mit vielen Fehlern). Braucht db.connectionString.",
+    "cacheMinutes": 5,
+    "offlineDays": 7,
+    "minFreeGB": 15,
+    "minFreePct": 10,
+    "serverMinFreePct": 15,
+    "critFreeGB": 5,
+    "critFreePct": 3,
+    "scanDays": 7,
+    "jobErrorRatePct": 20,
+    "jobErrorMin": 3
+  },
+
   "web": {
-    "_hinweis": "Weboberflaeche auf demselben Port wie der MCP: Uebersicht (/dashboard), Aktivitaetsprotokoll (/activity), Notbremse (/settings), Onboarding (/onboarding). users = Bediener mit Web-Zugang (Kurzname + Web-Token). Leer = Ersteinrichtungs-Modus: beim Start steht ein einmaliger Setup-Link im Log (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator im Browser (/setup) anlegt. Weitere Bediener ueber /onboarding. Schreib-, Ausfuehr- und Loesch-Tools wirken sofort, stehen im Aktivitaetsprotokoll (activity-JJJJ-MM.jsonl) und lassen sich mit der Notbremse sperren. Eine alte approval-Section (vor Version 2) liest der Server weiter: publicUrl, requester und approvers als Web-Zugang.",
+    "_hinweis": "Weboberflaeche auf demselben Port wie der MCP: Lagebild mit offenen Punkten (/dashboard), Rollouts eines Client Commands (/dashboard/rollout), Fehler-Stopp der Windows-Updates (/dashboard/updates), Aktivitaetsprotokoll (/activity), Notbremse (/settings), Onboarding (/onboarding). users = Bediener mit Web-Zugang (Kurzname + Web-Token). Leer = Ersteinrichtungs-Modus: beim Start steht ein einmaliger Setup-Link im Log (Zeile 'ERSTEINRICHTUNG NOETIG'), damit ihr den ersten Administrator im Browser (/setup) anlegt. Weitere Bediener ueber /onboarding. Schreib-, Ausfuehr- und Loesch-Tools wirken sofort, stehen im Aktivitaetsprotokoll (activity-JJJJ-MM.jsonl) und lassen sich mit der Notbremse sperren. Eine alte approval-Section (vor Version 2) liest der Server weiter: publicUrl, requester und approvers als Web-Zugang.",
     "publicUrl": "http://127.0.0.1:8765",
     "users": []
   }

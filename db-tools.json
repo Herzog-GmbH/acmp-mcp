@@ -220,8 +220,8 @@
     },
     {
         "name":  "acmp_bitlocker_status",
-        "description":  "BitLocker-VerschluesselungsSTATUS je Client und Laufwerk: Schutzstatus, Verschluesselungszustand (decoded), Prozent, Methode, Volume-Typ, TPM-Nutzung, Kapazitaet. NUR Status - liest NIEMALS Recovery-Keys (_RecoveryInfo/_AutoPasswords). Read-only.",
-        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS ComputerName, di.DriveLetter AS DriveLetter, di.IsProtected AS IsProtected, CASE di.VolumeState WHEN 0 THEN \u0027FullyDecrypted\u0027 WHEN 1 THEN \u0027FullyEncrypted\u0027 WHEN 2 THEN \u0027EncryptionInProgress\u0027 WHEN 3 THEN \u0027DecryptionInProgress\u0027 WHEN 4 THEN \u0027EncryptionPaused\u0027 WHEN 5 THEN \u0027DecryptionPaused\u0027 ELSE CONVERT(varchar(12), di.VolumeState) END AS EncryptionState, di.EncryptionPercentage AS EncryptionPercentage, CASE di.EncryptionMethod WHEN 0 THEN \u0027None\u0027 WHEN 3 THEN \u0027AES_128\u0027 WHEN 4 THEN \u0027AES_256\u0027 WHEN 6 THEN \u0027XTS_AES_128\u0027 WHEN 7 THEN \u0027XTS_AES_256\u0027 ELSE CONVERT(varchar(12), di.EncryptionMethod) END AS EncryptionMethod, CASE di.VolumeType WHEN 0 THEN \u0027OperatingSystem\u0027 WHEN 1 THEN \u0027FixedData\u0027 WHEN 2 THEN \u0027Removable\u0027 ELSE CONVERT(varchar(12), di.VolumeType) END AS VolumeType, di.IsLocked AS IsLocked, di.IsTPmUsed AS UsesTpm, di.IsTpmWithPinEnabled AS TpmWithPin, di.IsRecoveryPasswordEnabled AS RecoveryPasswordConfigured, CONVERT(decimal(18,1), di.CapacityKB/1048576.0) AS CapacityGB, st.IsManagedByAcmp AS ManagedByAcmp, st.LastChange AS StatusLastChange FROM CLT_Sec_BitLocker_DriveInventory di INNER JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = di.ClientId LEFT JOIN CLT_Sec_BitLocker_Status st ON st.ClientId = di.ClientId WHERE (@client IS NULL OR di.ClientId = @client) AND (@name IS NULL OR c.COMPUTERNAME LIKE \u0027%\u0027 + @name + \u0027%\u0027) ORDER BY c.COMPUTERNAME, di.DriveLetter",
+        "description":  "BitLocker-VerschluesselungsSTATUS je Client und Laufwerk: Schutzstatus, Verschluesselungszustand (decoded), Prozent, Methode, Volume-Typ (ACMP: 1 = Betriebssystem/C:, 2 = Datenlaufwerk; geprueft 23.10.2026), TPM-Nutzung, Kapazitaet. NUR Status - liest NIEMALS Recovery-Keys (_RecoveryInfo/_AutoPasswords). Read-only.",
+        "sql":  "SELECT TOP (500) c.COMPUTERNAME AS ComputerName, di.DriveLetter AS DriveLetter, di.IsProtected AS IsProtected, CASE di.VolumeState WHEN 0 THEN \u0027FullyDecrypted\u0027 WHEN 1 THEN \u0027FullyEncrypted\u0027 WHEN 2 THEN \u0027EncryptionInProgress\u0027 WHEN 3 THEN \u0027DecryptionInProgress\u0027 WHEN 4 THEN \u0027EncryptionPaused\u0027 WHEN 5 THEN \u0027DecryptionPaused\u0027 ELSE CONVERT(varchar(12), di.VolumeState) END AS EncryptionState, di.EncryptionPercentage AS EncryptionPercentage, CASE di.EncryptionMethod WHEN 0 THEN \u0027None\u0027 WHEN 3 THEN \u0027AES_128\u0027 WHEN 4 THEN \u0027AES_256\u0027 WHEN 6 THEN \u0027XTS_AES_128\u0027 WHEN 7 THEN \u0027XTS_AES_256\u0027 ELSE CONVERT(varchar(12), di.EncryptionMethod) END AS EncryptionMethod, CASE di.VolumeType WHEN 1 THEN \u0027OperatingSystem\u0027 WHEN 2 THEN \u0027FixedData\u0027 WHEN 3 THEN \u0027Removable\u0027 ELSE CONVERT(varchar(12), di.VolumeType) END AS VolumeType, di.IsLocked AS IsLocked, di.IsTPmUsed AS UsesTpm, di.IsTpmWithPinEnabled AS TpmWithPin, di.IsRecoveryPasswordEnabled AS RecoveryPasswordConfigured, CONVERT(decimal(18,1), di.CapacityKB/1048576.0) AS CapacityGB, st.IsManagedByAcmp AS ManagedByAcmp, st.LastChange AS StatusLastChange FROM CLT_Sec_BitLocker_DriveInventory di INNER JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = di.ClientId LEFT JOIN CLT_Sec_BitLocker_Status st ON st.ClientId = di.ClientId WHERE (@client IS NULL OR di.ClientId = @client) AND (@name IS NULL OR c.COMPUTERNAME LIKE \u0027%\u0027 + @name + \u0027%\u0027) ORDER BY c.COMPUTERNAME, di.DriveLetter",
         "args":  [
                      {
                          "name":  "client",
@@ -317,8 +317,8 @@
     },
     {
         "name":  "acmp_oval_definitions",
-        "description":  "Sucht flottenweit in den OVAL-Schwachstellen-Definitionen, die ACMP kennt (SYS_Sec_OvalDefinitions), nach CVE oder Produkt - ein Aufruf, kein Client noetig. Je Definition: CVE, CVSS-Score, Severity, Veroeffentlicht/Geaendert (Datum der CVE), Titel, Produkte, BetroffeneClients (aktive Treffer auf nicht ausgemusterten Clients), Ausgenommen (in ACMP ausgenommen), GescanntSeitVeroeffentlichung (Clients, deren letzter OVAL-Scan nach der Veroeffentlichung lag) von ClientsMitScan, Clients (Computernamen, nur bei Suche mit cve) und OvalDefinitionId. Neueste zuerst. Ohne cve/product: die neuesten Definitionen (zeigt, wie aktuell der Definitionsbestand ist). LESEHILFE: Kein Treffer = ACMP hat (noch) keine Definition fuer diese CVE/dieses Produkt. BetroffeneClients 0 heisst nur \u0027beim letzten Scan nicht gefunden\u0027 - ist GescanntSeitVeroeffentlichung klein, sind die meisten Clients seitdem nicht gescannt und die Aussage nichts wert (Scan-Alter je Client: acmp_oval_scan_status). GescanntSeitVeroeffentlichung ist eine Obergrenze, weil ACMP eine Definition oft erst Tage nach der CVE erhaelt. Read-only.",
-        "sql":  "SET NOCOUNT ON; DECLARE @ls TABLE (ClientId uniqueidentifier PRIMARY KEY, LastScan datetime NULL); INSERT INTO @ls (ClientId, LastScan) SELECT h.ClientId, MAX(h.LastScanDateTime) FROM CLT_Sec_OvalDefinitions_Results_History h JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = h.ClientId WHERE c.IsRetired = 0 GROUP BY h.ClientId; DECLARE @mitScan int; SELECT @mitScan = COUNT(*) FROM @ls; WITH cl AS (SELECT CLIENTID FROM CLT_CLIENTS_TABLE WHERE IsRetired = 0), hit AS (SELECT r.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results r JOIN cl ON cl.CLIENTID = r.ClientId GROUP BY r.OID), exc AS (SELECT x.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results_Excluded x JOIN cl ON cl.CLIENTID = x.ClientId GROUP BY x.OID) SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 500 THEN @limit ELSE 50 END) o.CVEId AS CVE, CAST(ROUND(sd.Score, 1) AS decimal(3,1)) AS CvssScore, sd.Severity AS Severity, CONVERT(varchar(10), sd.PublishedDate, 23) AS Veroeffentlicht, CONVERT(varchar(10), sd.LastModifiedDate, 23) AS Geaendert, o.Title AS Titel, o.ProductNames AS Produkte, ISNULL(hit.n, 0) AS BetroffeneClients, ISNULL(exc.n, 0) AS Ausgenommen, (SELECT COUNT(*) FROM @ls s WHERE s.LastScan \u003e= sd.PublishedDate) AS GescanntSeitVeroeffentlichung, @mitScan AS ClientsMitScan, CASE WHEN @cve IS NOT NULL AND hit.n \u003e 0 THEN STUFF((SELECT \u0027, \u0027 + c.COMPUTERNAME FROM CLT_Sec_OvalDefinitions_Results r2 JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = r2.ClientId AND c.IsRetired = 0 WHERE r2.OID = o.OID ORDER BY c.COMPUTERNAME FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027) END AS Clients, o.DefinitionId AS OvalDefinitionId FROM SYS_Sec_OvalDefinitions o OUTER APPLY (SELECT TOP 1 v.Score, v.Severity, v.PublishedDate, v.LastModifiedDate FROM SYS_Sec_VulnerabilityScoreDefinitions v WHERE v.CVEId = o.CVEId ORDER BY v.Version DESC) sd LEFT JOIN hit ON hit.OID = o.OID LEFT JOIN exc ON exc.OID = o.OID WHERE (@cve IS NULL OR o.CVEId LIKE \u0027%\u0027 + @cve + \u0027%\u0027) AND (@product IS NULL OR o.ProductNames LIKE \u0027%\u0027 + @product + \u0027%\u0027 OR o.Title LIKE \u0027%\u0027 + @product + \u0027%\u0027) AND (@minScore IS NULL OR sd.Score \u003e= @minScore) AND (ISNULL(@affectedOnly, 0) = 0 OR hit.n \u003e 0) ORDER BY sd.PublishedDate DESC, sd.Score DESC, o.CVEId",
+        "description":  "Sucht flottenweit in den OVAL-Schwachstellen-Definitionen, die ACMP kennt (SYS_Sec_OvalDefinitions), nach CVE oder Produkt - ein Aufruf, kein Client noetig. Je Definition: CVE, CVSS-Score (leer, solange die CVE noch nicht bewertet ist), Severity, Veroeffentlicht/Geaendert (Datum der CVE), Titel, Produkte, BetroffeneClients (aktive Treffer auf nicht ausgemusterten Clients), Ausgenommen (in ACMP ausgenommen), GescanntSeitVeroeffentlichung (Clients, deren letzter OVAL-Scan nach der Veroeffentlichung lag) von ClientsMitScan, Clients (Computernamen, nur bei Suche mit cve) und OvalDefinitionId. Neueste zuerst. Ohne cve/product: die neuesten Definitionen (zeigt, wie aktuell der Definitionsbestand ist). LESEHILFE: Kein Treffer = ACMP hat (noch) keine Definition fuer diese CVE/dieses Produkt. BetroffeneClients 0 heisst nur \u0027beim letzten Scan nicht gefunden\u0027 - ist GescanntSeitVeroeffentlichung klein, sind die meisten Clients seitdem nicht gescannt und die Aussage nichts wert (Scan-Alter je Client: acmp_oval_scan_status). GescanntSeitVeroeffentlichung ist eine Obergrenze, weil ACMP eine Definition oft erst Tage nach der CVE erhaelt. Read-only.",
+        "sql":  "SET NOCOUNT ON; DECLARE @ls TABLE (ClientId uniqueidentifier PRIMARY KEY, LastScan datetime NULL); INSERT INTO @ls (ClientId, LastScan) SELECT h.ClientId, MAX(h.LastScanDateTime) FROM CLT_Sec_OvalDefinitions_Results_History h JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = h.ClientId WHERE c.IsRetired = 0 GROUP BY h.ClientId; DECLARE @mitScan int; SELECT @mitScan = COUNT(*) FROM @ls; WITH cl AS (SELECT CLIENTID FROM CLT_CLIENTS_TABLE WHERE IsRetired = 0), hit AS (SELECT r.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results r JOIN cl ON cl.CLIENTID = r.ClientId GROUP BY r.OID), exc AS (SELECT x.OID, COUNT(*) AS n FROM CLT_Sec_OvalDefinitions_Results_Excluded x JOIN cl ON cl.CLIENTID = x.ClientId GROUP BY x.OID) SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 500 THEN @limit ELSE 50 END) o.CVEId AS CVE, CASE WHEN sd.Score \u003c 0 THEN NULL ELSE CAST(ROUND(sd.Score, 1) AS decimal(3,1)) END AS CvssScore, sd.Severity AS Severity, CONVERT(varchar(10), sd.PublishedDate, 23) AS Veroeffentlicht, CONVERT(varchar(10), sd.LastModifiedDate, 23) AS Geaendert, o.Title AS Titel, o.ProductNames AS Produkte, ISNULL(hit.n, 0) AS BetroffeneClients, ISNULL(exc.n, 0) AS Ausgenommen, (SELECT COUNT(*) FROM @ls s WHERE s.LastScan \u003e= sd.PublishedDate) AS GescanntSeitVeroeffentlichung, @mitScan AS ClientsMitScan, CASE WHEN @cve IS NOT NULL AND hit.n \u003e 0 THEN STUFF((SELECT \u0027, \u0027 + c.COMPUTERNAME FROM CLT_Sec_OvalDefinitions_Results r2 JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = r2.ClientId AND c.IsRetired = 0 WHERE r2.OID = o.OID ORDER BY c.COMPUTERNAME FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027) END AS Clients, o.DefinitionId AS OvalDefinitionId FROM SYS_Sec_OvalDefinitions o OUTER APPLY (SELECT TOP 1 v.Score, v.Severity, v.PublishedDate, v.LastModifiedDate FROM SYS_Sec_VulnerabilityScoreDefinitions v WHERE v.CVEId = o.CVEId ORDER BY v.Version DESC) sd LEFT JOIN hit ON hit.OID = o.OID LEFT JOIN exc ON exc.OID = o.OID WHERE (@cve IS NULL OR o.CVEId LIKE \u0027%\u0027 + @cve + \u0027%\u0027) AND (@product IS NULL OR o.ProductNames LIKE \u0027%\u0027 + @product + \u0027%\u0027 OR o.Title LIKE \u0027%\u0027 + @product + \u0027%\u0027) AND (@minScore IS NULL OR sd.Score \u003e= @minScore) AND (ISNULL(@affectedOnly, 0) = 0 OR hit.n \u003e 0) ORDER BY sd.PublishedDate DESC, sd.Score DESC, o.CVEId",
         "args":  [
                      {
                          "name":  "cve",
@@ -554,6 +554,367 @@
                          "kind":  "int",
                          "description":  "Anzahl Bytes (Standard 8000, max 60000)."
                      }
+                 ]
+    },
+    {
+        "name":  "acmp_wum_update_clients",
+        "description":  "Windows Update Management: welche Clients ein bestimmtes Update brauchen (fehlt), installiert haben oder daran gescheitert sind (fehlgeschlagen), aus CLT_Wum_InstalledUpdates/_NotInstalledUpdates/_FailedUpdates. update = Update-Id (GUID), KB-Nummer (z.B. 5127648 oder KB5127648) oder Teil des Titels; es zaehlen nur Updates, die mindestens ein Client meldet (hoechstens 40, neueste zuerst). Je Client der Stand mit Meldedatum, Titel, KB, ob in ACMP abgelehnt. Ein Client mit Fehler und spaeterer Installation zaehlt als installiert. summary=1: je Update nur die Zahlen. ACHTUNG: Kumulatives Update und Funktionsupdate koennen dieselbe KB tragen - Titel bzw. UpdateId beachten. Den Fehlercode speichert ACMP nicht, dafuer ein Skript auf dem Client. Read-only.",
+        "sql":  "SET NOCOUNT ON; DECLARE @q nvarchar(400) = LTRIM(RTRIM(@update)); DECLARE @gid uniqueidentifier = TRY_CAST(REPLACE(REPLACE(@q, \u0027{\u0027, \u0027\u0027), \u0027}\u0027, \u0027\u0027) AS uniqueidentifier); DECLARE @kb int = CASE WHEN @gid IS NULL THEN TRY_CAST(REPLACE(UPPER(@q), \u0027KB\u0027, \u0027\u0027) AS int) END; DECLARE @p int = CASE WHEN @state IS NULL OR @state IN (\u0027\u0027, \u0027alle\u0027, \u0027all\u0027) THEN 0 WHEN @state LIKE \u0027inst%\u0027 THEN 3 WHEN @state LIKE \u0027fehlg%\u0027 OR @state LIKE \u0027fehler%\u0027 OR @state LIKE \u0027fail%\u0027 THEN 2 WHEN @state LIKE \u0027fehlt%\u0027 OR @state LIKE \u0027need%\u0027 OR @state LIKE \u0027miss%\u0027 OR @state LIKE \u0027offen%\u0027 THEN 1 ELSE 0 END; DECLARE @u TABLE (Id uniqueidentifier PRIMARY KEY); INSERT INTO @u (Id) SELECT TOP 40 w.Id FROM Sys_Wum_Updates w LEFT JOIN SYS_Wum_Updates_Localization l ON l.Id = w.Id WHERE ((@gid IS NOT NULL AND w.Id = @gid) OR (@kb IS NOT NULL AND w.KBId = @kb) OR (@gid IS NULL AND @kb IS NULL AND l.Name LIKE \u0027%\u0027 + @q + \u0027%\u0027)) AND (EXISTS (SELECT 1 FROM CLT_Wum_InstalledUpdates x WHERE x.UpdateId = w.Id) OR EXISTS (SELECT 1 FROM CLT_Wum_NotInstalledUpdates x WHERE x.UpdateId = w.Id) OR EXISTS (SELECT 1 FROM CLT_Wum_FailedUpdates x WHERE x.UpdateId = w.Id)) AND (@client IS NULL OR EXISTS (SELECT 1 FROM CLT_Wum_InstalledUpdates x WHERE x.UpdateId = w.Id AND x.ClientId = @client) OR EXISTS (SELECT 1 FROM CLT_Wum_NotInstalledUpdates x WHERE x.UpdateId = w.Id AND x.ClientId = @client) OR EXISTS (SELECT 1 FROM CLT_Wum_FailedUpdates x WHERE x.UpdateId = w.Id AND x.ClientId = @client)) ORDER BY w.CreationDate DESC; DECLARE @st TABLE (ClientId uniqueidentifier, UpdateId uniqueidentifier, Prio int, ReportDate datetime); INSERT INTO @st (ClientId, UpdateId, Prio, ReportDate) SELECT s.ClientId, s.UpdateId, MAX(s.Prio), MAX(s.ReportDate) FROM (SELECT ClientId, UpdateId, 3 AS Prio, ReportDate FROM CLT_Wum_InstalledUpdates WHERE UpdateId IN (SELECT Id FROM @u) UNION ALL SELECT ClientId, UpdateId, 2, ReportDate FROM CLT_Wum_FailedUpdates WHERE UpdateId IN (SELECT Id FROM @u) UNION ALL SELECT ClientId, UpdateId, 1, ReportDate FROM CLT_Wum_NotInstalledUpdates WHERE UpdateId IN (SELECT Id FROM @u)) s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientId AND c.IsRetired = 0 WHERE (@client IS NULL OR s.ClientId = @client) GROUP BY s.ClientId, s.UpdateId; IF ISNULL(@summary, 0) = 1 SELECT l.Name AS [Update], w.KBId AS KB, SUM(CASE WHEN s.Prio = 1 THEN 1 ELSE 0 END) AS Fehlt, SUM(CASE WHEN s.Prio = 2 THEN 1 ELSE 0 END) AS Fehlgeschlagen, SUM(CASE WHEN s.Prio = 3 THEN 1 ELSE 0 END) AS Installiert, CASE WHEN w.IsDeclined = 1 THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END AS Abgelehnt, CASE WHEN w.IsSuperseded = 1 THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END AS Ersetzt, CONVERT(varchar(10), w.CreationDate, 23) AS Erschienen, CAST(w.Id AS varchar(36)) AS UpdateId FROM @u u JOIN Sys_Wum_Updates w ON w.Id = u.Id LEFT JOIN SYS_Wum_Updates_Localization l ON l.Id = w.Id LEFT JOIN @st s ON s.UpdateId = u.Id GROUP BY l.Name, w.KBId, w.IsDeclined, w.IsSuperseded, w.CreationDate, w.Id ORDER BY w.CreationDate DESC; ELSE SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, CASE s.Prio WHEN 3 THEN \u0027installiert\u0027 WHEN 2 THEN \u0027fehlgeschlagen\u0027 ELSE \u0027fehlt\u0027 END AS Stand, CONVERT(varchar(16), s.ReportDate, 120) AS Gemeldet, l.Name AS [Update], w.KBId AS KB, CASE WHEN w.IsDeclined = 1 THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END AS Abgelehnt, CAST(w.Id AS varchar(36)) AS UpdateId FROM @st s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientId JOIN Sys_Wum_Updates w ON w.Id = s.UpdateId LEFT JOIN SYS_Wum_Updates_Localization l ON l.Id = w.Id WHERE @p = 0 OR s.Prio = @p ORDER BY CASE s.Prio WHEN 2 THEN 0 WHEN 1 THEN 1 ELSE 2 END, l.Name, c.COMPUTERNAME;",
+        "args":  [
+                     {
+                         "name":  "update",
+                         "required":  true,
+                         "kind":  "string",
+                         "description":  "Update-Id (GUID), KB-Nummer (5127648 oder KB5127648) oder Teil des Titels."
+                     },
+                     {
+                         "name":  "state",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: fehlt, fehlgeschlagen, installiert oder alle (Standard)."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: nur dieser Client (Computername oder ClientId)."
+                     },
+                     {
+                         "name":  "summary",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = je Update nur die Zahlen (fehlt/fehlgeschlagen/installiert). Standard 0 = je Client."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_wu_diagnosis",
+        "description":  "Registry-Pruefung von Windows Update Management (CLT_WindowsUpdate_RegistryKeyDiagnosis): ACMP prueft bei der WUM-Inventarisierung Werte, die WUM stoeren koennen, z.B. fehlende oder abweichende WSUS-Richtlinien (WUServer, UseWUServer, AUOptions), pausierte Updates oder Windows Update for Business (PauseQualityUpdates..., IsWUfBConfigured). Je Befund: Rechner, Schluessel unter HKLM, Wert, Befund (englisch, von ACMP). Hilft bei der Frage, warum ein Client keine oder andere Updates meldet. Filter client, name (Teil von Schluessel oder Wert). Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, d.[Key] AS Schluessel, d.Name AS Wert, d.Reason AS Befund FROM CLT_WindowsUpdate_RegistryKeyDiagnosis d JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = d.ClientId AND c.IsRetired = 0 WHERE (@client IS NULL OR d.ClientId = @client) AND (@name IS NULL OR d.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR d.[Key] LIKE \u0027%\u0027 + @name + \u0027%\u0027) ORDER BY c.COMPUTERNAME, d.[Key], d.Name",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil von Schluessel oder Wert, z.B. \u0027Pause\u0027 oder \u0027WUServer\u0027."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_os_builds",
+        "description":  "Windows-Build mit Revision (UBR) je Client, z.B. 26200.9711 - daran sieht man ohne Skript, ob ein kumulatives Update wirklich installiert ist (CLT_OPERATINGSYSTEM.BuildNo + PatchLevel; PatchLevel ist die UBR, am 25.10.2026 gegen die Registry eines Clients geprueft). Je Client: Betriebssystem, Version (z.B. 25H2), Build, NeuesteUbrDesBuilds (hoechste UBR, die ein aktiver Client mit demselben Build meldet), Rueckstand ja/nein, letzter Start, letzte Inventarisierung. Filter: client; build (Anfang von Build.UBR wie \u002726200\u0027 oder \u002726200.9711\u0027, Version wie \u002725H2\u0027 oder Teil des Betriebssystems wie \u0027Server 2019\u0027); behind=1 nur Clients mit Rueckstand. summary=1: je Build.UBR die Zahl der Clients mit Namen. Linux/macOS ohne Build fehlen. Read-only.",
+        "sql":  "SET NOCOUNT ON; DECLARE @b TABLE (Rechner nvarchar(255), ClientId uniqueidentifier, OS nvarchar(255), Version nvarchar(50), BuildNo int, Ubr int, LetzterStart datetime, Inventar float); INSERT INTO @b SELECT c.COMPUTERNAME, c.CLIENTID, o.OSSTRING, o.DisplayVersion, o.BuildNo, TRY_CAST(o.PatchLevel AS int), o.LastBoot, c.LASTUPDATE FROM CLT_OPERATINGSYSTEM o JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = o.CLIENTID AND c.IsRetired = 0 WHERE o.BuildNo \u003e 0; WITH x AS (SELECT b.*, MAX(b.Ubr) OVER (PARTITION BY b.BuildNo) AS MaxUbr, CAST(b.BuildNo AS varchar(10)) + \u0027.\u0027 + ISNULL(CAST(b.Ubr AS varchar(10)), \u0027?\u0027) AS Build FROM @b b), f AS (SELECT * FROM x WHERE (@client IS NULL OR x.ClientId = @client) AND (@build IS NULL OR x.Build LIKE @build + \u0027%\u0027 OR x.Version = @build OR x.OS LIKE \u0027%\u0027 + @build + \u0027%\u0027) AND (ISNULL(@behind, 0) = 0 OR x.Ubr \u003c x.MaxUbr)) SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) * FROM (SELECT f.Rechner, f.OS AS Betriebssystem, f.Version, f.Build, CAST(f.BuildNo AS varchar(10)) + \u0027.\u0027 + CAST(f.MaxUbr AS varchar(10)) AS NeuesteUbrDesBuilds, CASE WHEN f.Ubr \u003c f.MaxUbr THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END AS Rueckstand, CASE WHEN f.LetzterStart \u003e \u00272000-01-01\u0027 THEN CONVERT(varchar(16), f.LetzterStart, 120) END AS LetzterStart, CONVERT(varchar(16), CAST(f.Inventar - 2 AS datetime), 120) AS Inventarisiert, NULL AS Anzahl, NULL AS Clients FROM f WHERE ISNULL(@summary, 0) = 0 UNION ALL SELECT NULL, MAX(f.OS), MAX(f.Version), f.Build, CAST(f.BuildNo AS varchar(10)) + \u0027.\u0027 + CAST(MAX(f.MaxUbr) AS varchar(10)), CASE WHEN MAX(f.Ubr) \u003c MAX(f.MaxUbr) THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END, NULL, NULL, COUNT(*), LEFT(STRING_AGG(CAST(f.Rechner AS nvarchar(max)), \u0027, \u0027) WITHIN GROUP (ORDER BY f.Rechner), 600) FROM f WHERE ISNULL(@summary, 0) = 1 GROUP BY f.BuildNo, f.Build) r ORDER BY r.Build, r.Rechner",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "build",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Anfang von Build.UBR (\u002726200\u0027, \u002726200.9711\u0027), Version (\u002725H2\u0027) oder Teil des Betriebssystems (\u0027Server 2019\u0027)."
+                     },
+                     {
+                         "name":  "behind",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Clients, deren UBR unter der neuesten UBR ihres Builds liegt."
+                     },
+                     {
+                         "name":  "summary",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = je Build.UBR die Zahl der Clients mit Namen."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_user_logons",
+        "description":  "Anmeldungen von Benutzern an Clients, wie der ACMP-Agent sie meldet (CLT_MasterData_Contacts_LoginInformation): an welchen Rechnern war eine Person, wer war an einem Rechner. Je Benutzer und Rechner: Benutzer (Domaene\\Name), Vor- und Nachname, Rechner, Zahl der Eintraege, erste und letzte Anmeldung (Ortszeit). Neueste zuerst. user = Teil von Anmeldename, Vor-/Nachname oder E-Mail; client = Computername oder ClientId; days = Zeitraum (Standard 90). Ohne Filter: die letzten Anmeldungen der ganzen Flotte. Ergaenzt acmp_get_os_info (nur der letzte Benutzer). Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) ISNULL(NULLIF(li.DomainName, \u0027\u0027) + \u0027\\\u0027, \u0027\u0027) + li.UserName AS Benutzer, LTRIM(ISNULL(li.FirstName, \u0027\u0027) + \u0027 \u0027 + ISNULL(li.LastName, \u0027\u0027)) AS Name, c.COMPUTERNAME AS Rechner, COUNT(*) AS Eintraege, CONVERT(varchar(16), MIN(li.TimestampUTC) AT TIME ZONE \u0027UTC\u0027 AT TIME ZONE \u0027W. Europe Standard Time\u0027, 120) AS Erste, CONVERT(varchar(16), MAX(li.TimestampUTC) AT TIME ZONE \u0027UTC\u0027 AT TIME ZONE \u0027W. Europe Standard Time\u0027, 120) AS Letzte FROM CLT_MasterData_Contacts_LoginInformation li JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = li.ClientId AND c.IsRetired = 0 WHERE li.TimestampUTC \u003e= DATEADD(day, -(CASE WHEN @days BETWEEN 1 AND 3650 THEN @days ELSE 90 END), SYSUTCDATETIME()) AND (@client IS NULL OR li.ClientId = @client) AND (@user IS NULL OR li.UserName LIKE \u0027%\u0027 + @user + \u0027%\u0027 OR li.Email LIKE \u0027%\u0027 + @user + \u0027%\u0027 OR ISNULL(li.FirstName, \u0027\u0027) + \u0027 \u0027 + ISNULL(li.LastName, \u0027\u0027) LIKE \u0027%\u0027 + @user + \u0027%\u0027 OR ISNULL(li.LastName, \u0027\u0027) + \u0027 \u0027 + ISNULL(li.FirstName, \u0027\u0027) LIKE \u0027%\u0027 + @user + \u0027%\u0027) GROUP BY li.DomainName, li.UserName, li.FirstName, li.LastName, c.COMPUTERNAME ORDER BY MAX(li.TimestampUTC) DESC",
+        "args":  [
+                     {
+                         "name":  "user",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil von Anmeldename, Vor-/Nachname oder E-Mail, z.B. \u0027mustermann\u0027."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Zeitraum in Tagen, Standard 90.",
+                         "default":  "90"
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_server_jobs",
+        "description":  "Aufgaben des ACMP-Servers selbst (Console: Job-Monitor -\u003e Server-Jobs; SYS_ServerJobs, _Executions, _ExecutionLogs): Abgleiche, Downloads (WUM, Managed Software, Schwachstellen-Definitionen), Bereinigungen, Scanner, Berichte. Je Aufgabe: Name und Bereich wie in der Console, geplant/manuell, letzter Lauf mit Ergebnis (erfolgreich, fehlgeschlagen, uebersprungen, keine ACMP-Lizenz) und Zustand, Laeufe und Fehler im Zeitraum (days, Standard 30) und die letzte Fehlermeldung mit Zeit. Fehlgeschlagene zuerst. Filter name (Teil von Name oder Bereich), onlyFailed=1. Zeigt, ob der Server selbst Probleme hat (z.B. ein Scanner, der seit Tagen scheitert). Read-only.",
+        "sql":  "SET NOCOUNT ON; DECLARE @n TABLE (Id uniqueidentifier, Name nvarchar(400)); DECLARE @ids nvarchar(max), @de nvarchar(max); SELECT @ids = a.ValueIds, @de = a.DisplayValues_DE FROM SYS_DisplayFields_AvailableValues a JOIN SYS_DISPLAYFIELDS d ON d.FieldID = a.FieldId WHERE d.TABLENAME = \u0027VW_ServerJobs_Overview\u0027 AND d.FIELDNAME = \u0027ContentId\u0027; IF (SELECT COUNT(*) FROM STRING_SPLIT(@ids, \u0027,\u0027)) = (SELECT COUNT(*) FROM STRING_SPLIT(@de, \u0027,\u0027)) INSERT INTO @n SELECT TRY_CAST(i.value AS uniqueidentifier), REPLACE(t.value, \u0027\"\u0027, \u0027\u0027) FROM STRING_SPLIT(@ids, \u0027,\u0027, 1) i JOIN STRING_SPLIT(@de, \u0027,\u0027, 1) t ON t.ordinal = i.ordinal; SELECT @ids = a.ValueIds, @de = a.DisplayValues_DE FROM SYS_DisplayFields_AvailableValues a JOIN SYS_DISPLAYFIELDS d ON d.FieldID = a.FieldId WHERE d.TABLENAME = \u0027VW_ServerJobs_Overview\u0027 AND d.FIELDNAME = \u0027CategoryId\u0027; IF (SELECT COUNT(*) FROM STRING_SPLIT(@ids, \u0027,\u0027)) = (SELECT COUNT(*) FROM STRING_SPLIT(@de, \u0027,\u0027)) INSERT INTO @n SELECT TRY_CAST(i.value AS uniqueidentifier), REPLACE(t.value, \u0027\"\u0027, \u0027\u0027) FROM STRING_SPLIT(@ids, \u0027,\u0027, 1) i JOIN STRING_SPLIT(@de, \u0027,\u0027, 1) t ON t.ordinal = i.ordinal; DECLARE @since datetime = DATEADD(day, -(CASE WHEN @days BETWEEN 1 AND 365 THEN @days ELSE 30 END), GETDATE()); SELECT ISNULL(nc.Name, CAST(j.ContentId AS varchar(36))) AS Aufgabe, ISNULL(nk.Name, \u0027\u0027) AS Bereich, CASE WHEN j.IsManualJob = 1 THEN \u0027manuell\u0027 ELSE \u0027geplant\u0027 END AS Art, ISNULL(j.CreatorName, \u0027\u0027) AS Ersteller, CONVERT(varchar(16), le.StartDate, 120) AS LetzterLauf, CASE le.Result WHEN 0 THEN \u0027noch kein Ergebnis\u0027 WHEN 1 THEN \u0027erfolgreich\u0027 WHEN 2 THEN \u0027fehlgeschlagen\u0027 WHEN 3 THEN \u0027uebersprungen\u0027 WHEN 4 THEN \u0027keine ACMP-Lizenz\u0027 END AS LetztesErgebnis, CASE le.State WHEN 0 THEN \u0027wartend\u0027 WHEN 1 THEN \u0027laufend\u0027 WHEN 2 THEN \u0027abgeschlossen\u0027 WHEN 3 THEN \u0027abgebrochen\u0027 WHEN 4 THEN \u0027eingereiht\u0027 END AS Zustand, ISNULL(r.Laeufe, 0) AS LaeufeImZeitraum, ISNULL(r.Fehler, 0) AS FehlerImZeitraum, lf.Message AS LetzteFehlermeldung, CONVERT(varchar(16), lf.TimeStamp, 120) AS FehlerZeit FROM SYS_ServerJobs j LEFT JOIN @n nc ON nc.Id = j.ContentId LEFT JOIN @n nk ON nk.Id = j.CategoryId OUTER APPLY (SELECT TOP 1 x.StartDate, x.Result, x.State FROM SYS_ServerJobs_Executions x WHERE x.JobId = j.JobId ORDER BY x.StartDate DESC) le OUTER APPLY (SELECT COUNT(*) AS Laeufe, SUM(CASE WHEN x.Result = 2 THEN 1 ELSE 0 END) AS Fehler FROM SYS_ServerJobs_Executions x WHERE x.JobId = j.JobId AND x.StartDate \u003e= @since) r OUTER APPLY (SELECT TOP 1 g.Message, g.TimeStamp FROM SYS_ServerJobs_ExecutionLogs g JOIN SYS_ServerJobs_Executions x ON x.ExecId = g.ExecId WHERE x.JobId = j.JobId AND g.Type = 2 ORDER BY g.TimeStamp DESC) lf WHERE (@name IS NULL OR nc.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR nk.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (ISNULL(@onlyFailed, 0) = 0 OR r.Fehler \u003e 0 OR le.Result = 2) ORDER BY CASE WHEN le.Result = 2 THEN 0 WHEN r.Fehler \u003e 0 THEN 1 ELSE 2 END, nk.Name, nc.Name",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil des Namens oder Bereichs, z.B. \u0027Windows Update\u0027 oder \u0027Bereinigung\u0027."
+                     },
+                     {
+                         "name":  "onlyFailed",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Aufgaben mit Fehlern im Zeitraum oder fehlgeschlagenem letzten Lauf."
+                     },
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Zeitraum fuer Laeufe/Fehler in Tagen, Standard 30.",
+                         "default":  "30"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_mail_queue",
+        "description":  "Ausgehende Mails des ACMP-Servers, die noch in der Warteschlange haengen (SYS_EMails_Out_Queue mit _Errors und _Participants), z.B. geplante Berichte oder Helpdesk-Mails, die der Mailserver abweist. Je Mail: Betreff, erstellt, Teilnehmer (Von/An, leere Adresse als \u0027(leer)\u0027), Fehlermeldung, erster Fehler, letzter Versuch, Groesse. Neueste zuerst. Filter subject. Leer = keine haengenden Mails. Typische Ursache von \u0027Bad recipient address syntax\u0027: leere oder falsch geschriebene Empfaengeradresse im Bericht-Job. Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) q.Subject AS Betreff, CONVERT(varchar(16), CAST(q.Date - 2 AS datetime), 120) AS Erstellt, STUFF((SELECT \u0027; \u0027 + CASE p.ParticipantType WHEN 1 THEN \u0027Von: \u0027 WHEN 2 THEN \u0027An: \u0027 ELSE \u0027Typ \u0027 + CAST(p.ParticipantType AS varchar(5)) + \u0027: \u0027 END + CASE WHEN ISNULL(p.Address, \u0027\u0027) = \u0027\u0027 THEN \u0027(leer)\u0027 ELSE p.Address END FROM SYS_EMails_Out_Participants p WHERE p.MailId = q.Id ORDER BY p.ParticipantType, p.Address FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027) AS Teilnehmer, e.ErrorMessage AS Fehler, CONVERT(varchar(16), CAST(e.FirstDate - 2 AS datetime), 120) AS ErsterFehler, CONVERT(varchar(16), CAST(e.Date - 2 AS datetime), 120) AS LetzterVersuch, q.Size AS Groesse FROM SYS_EMails_Out_Queue q LEFT JOIN SYS_EMails_Out_Queue_Errors e ON e.MailId = q.Id WHERE (@subject IS NULL OR q.Subject LIKE \u0027%\u0027 + @subject + \u0027%\u0027) ORDER BY q.Date DESC",
+        "args":  [
+                     {
+                         "name":  "subject",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil des Betreffs."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_shares",
+        "description":  "Netzwerkfreigaben der Clients aus dem Inventar (CLT_Shares), flottenweit ohne Skript: Rechner, Freigabe, Pfad, Typ, Beschreibung. Standard ohne die administrativen Freigaben (C$, ADMIN$, IPC$) und ohne Drucker. Filter: client, name (Teil von Freigabe oder Pfad), includeAdmin=1, includePrinters=1, noServers=1 (nur Arbeitsplaetze - Freigaben auf Arbeitsplaetzen sind meist ungewollt). Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, s.ShareName AS Freigabe, s.Path AS Pfad, s.Type AS Typ, s.Description AS Beschreibung FROM CLT_Shares s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientID AND c.IsRetired = 0 LEFT JOIN CLT_OPERATINGSYSTEM o ON o.CLIENTID = s.ClientID WHERE (@client IS NULL OR s.ClientID = @client) AND (@name IS NULL OR s.ShareName LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR s.Path LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (ISNULL(@includeAdmin, 0) = 1 OR s.Type NOT LIKE \u0027%Admin%\u0027) AND (ISNULL(@includePrinters, 0) = 1 OR s.Type \u003c\u003e \u0027Print Queue\u0027) AND (ISNULL(@noServers, 0) = 0 OR ISNULL(o.OSSTRING, \u0027\u0027) NOT LIKE \u0027%Server%\u0027) ORDER BY c.COMPUTERNAME, s.ShareName",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil von Freigabename oder Pfad."
+                     },
+                     {
+                         "name":  "includeAdmin",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = auch C$, ADMIN$, IPC$."
+                     },
+                     {
+                         "name":  "includePrinters",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = auch freigegebene Drucker."
+                     },
+                     {
+                         "name":  "noServers",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Clients ohne Server-Betriebssystem."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_windows_features",
+        "description":  "Optionale Windows-Features je Client aus dem Inventar (CLT_SW_OPTIONALFEATURE), flottenweit ohne Skript - z.B. SMB1Protocol, MicrosoftWindowsPowerShellV2, TelnetClient, TFTP, NetFx3. Zustaende wie in der Console: aktiviert, deaktiviert, ausstehend, deaktiviert mit entfernter Nutzlast. Filter: name (Teil von Feature-Name oder Bezeichnung), client, state (aktiviert = Standard, deaktiviert, alle). summary=1: je Feature die Zahl aktiviert/deaktiviert/sonstige (Ueberblick vor einer Abschaltung). Read-only.",
+        "sql":  "DECLARE @s int = CASE WHEN @state LIKE \u0027deakt%\u0027 OR @state LIKE \u0027disab%\u0027 THEN 0 WHEN @state IN (\u0027alle\u0027, \u0027all\u0027) THEN -1 ELSE 2 END; IF ISNULL(@summary, 0) = 1 SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) f.Name AS Feature, f.Caption AS Bezeichnung, SUM(CASE WHEN x.InstallState = 2 THEN 1 ELSE 0 END) AS Aktiviert, SUM(CASE WHEN x.InstallState IN (0, 6) THEN 1 ELSE 0 END) AS Deaktiviert, SUM(CASE WHEN x.InstallState IN (1, 3, 4, 5) THEN 1 ELSE 0 END) AS Sonstige FROM CLT_SW_OPTIONALFEATURE x JOIN SYS_SW_OPTIONALFEATURE f ON f.Id = x.Id JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = x.ClientId AND c.IsRetired = 0 WHERE (@name IS NULL OR f.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR f.Caption LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (@client IS NULL OR x.ClientId = @client) GROUP BY f.Name, f.Caption ORDER BY Aktiviert DESC, f.Name; ELSE SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, f.Name AS Feature, f.Caption AS Bezeichnung, CASE x.InstallState WHEN 0 THEN \u0027deaktiviert\u0027 WHEN 1 THEN \u0027Deaktivierung ausstehend\u0027 WHEN 2 THEN \u0027aktiviert\u0027 WHEN 3 THEN \u0027Aktivierung ausstehend\u0027 WHEN 4 THEN \u0027ueberholt\u0027 WHEN 5 THEN \u0027teilweise installiert\u0027 WHEN 6 THEN \u0027deaktiviert, Nutzlast entfernt\u0027 END AS Zustand FROM CLT_SW_OPTIONALFEATURE x JOIN SYS_SW_OPTIONALFEATURE f ON f.Id = x.Id JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = x.ClientId AND c.IsRetired = 0 WHERE (@name IS NULL OR f.Name LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR f.Caption LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (@client IS NULL OR x.ClientId = @client) AND (@s = -1 OR x.InstallState = @s OR (@s = 0 AND x.InstallState = 6)) ORDER BY f.Name, c.COMPUTERNAME;",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil des Feature-Namens oder der Bezeichnung, z.B. \u0027SMB1\u0027 oder \u0027PowerShellV2\u0027."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "state",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "aktiviert (Standard), deaktiviert oder alle."
+                     },
+                     {
+                         "name":  "summary",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = je Feature nur die Zahlen."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_services_search",
+        "description":  "Windows-Dienste aus dem Inventar (CLT_Services), flottenweit ohne Skript: auf welchen Rechnern ein Dienst laeuft, gestoppt oder deaktiviert ist und unter welchem Konto. Je Treffer: Rechner, Dienst, Anzeigename, Zustand (Running/Stopped), Starttyp (Auto/Manual/Disabled), Konto, Pfad. Filter: name (Teil von Dienst- oder Anzeigename), client, state, startMode, account (Teil des Kontos, z.B. \u0027FIRMA\u0027 fuer Dienste unter Domaenenkonten). summary=1: je Dienst die Zahlen. Stand = letzte Inventarisierung. Read-only.",
+        "sql":  "IF ISNULL(@summary, 0) = 1 SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) s.ServiceName AS Dienst, MAX(s.ServiceDisplayName) AS Anzeigename, COUNT(*) AS Rechner, SUM(CASE WHEN s.State = \u0027Running\u0027 THEN 1 ELSE 0 END) AS Laeuft, SUM(CASE WHEN s.State = \u0027Stopped\u0027 THEN 1 ELSE 0 END) AS Gestoppt, SUM(CASE WHEN s.StartMode = \u0027Auto\u0027 THEN 1 ELSE 0 END) AS Automatisch, SUM(CASE WHEN s.StartMode = \u0027Disabled\u0027 THEN 1 ELSE 0 END) AS Deaktiviert FROM CLT_Services s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientID AND c.IsRetired = 0 WHERE (@name IS NULL OR s.ServiceName LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR s.ServiceDisplayName LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (@client IS NULL OR s.ClientID = @client) AND (@account IS NULL OR s.StartName LIKE \u0027%\u0027 + @account + \u0027%\u0027) GROUP BY s.ServiceName ORDER BY COUNT(*) DESC, s.ServiceName; ELSE SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, s.ServiceName AS Dienst, s.ServiceDisplayName AS Anzeigename, s.State AS Zustand, s.StartMode AS Starttyp, s.StartName AS Konto, s.PathName AS Pfad FROM CLT_Services s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientID AND c.IsRetired = 0 WHERE (@name IS NULL OR s.ServiceName LIKE \u0027%\u0027 + @name + \u0027%\u0027 OR s.ServiceDisplayName LIKE \u0027%\u0027 + @name + \u0027%\u0027) AND (@client IS NULL OR s.ClientID = @client) AND (@state IS NULL OR s.State LIKE @state + \u0027%\u0027) AND (@startMode IS NULL OR s.StartMode LIKE @startMode + \u0027%\u0027) AND (@account IS NULL OR s.StartName LIKE \u0027%\u0027 + @account + \u0027%\u0027) ORDER BY s.ServiceName, c.COMPUTERNAME;",
+        "args":  [
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil von Dienst- oder Anzeigename, z.B. \u0027TeamViewer\u0027 oder \u0027Spooler\u0027."
+                     },
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "state",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Running oder Stopped."
+                     },
+                     {
+                         "name":  "startMode",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Auto, Manual oder Disabled."
+                     },
+                     {
+                         "name":  "account",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optional: Teil des Dienstkontos, z.B. \u0027FIRMA\u0027 oder \u0027LocalSystem\u0027."
+                     },
+                     {
+                         "name":  "summary",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = je Dienst nur die Zahlen."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_hardware_health",
+        "description":  "Zustand von Akku und TPM je Client aus dem Inventar (CLT_HDW_BATTERY, CLT_Tpm): Akku vorhanden, Restkapazitaet in Prozent der Nennkapazitaet (Vollladung / Design, unter etwa 60 % lohnt ein Tausch), Design- und Vollladekapazitaet in mWh, Akku-Bezeichnung; TPM-Version, aktiv ja/nein, Hersteller, Firmware. Schlechteste Akkus zuerst. Filter: client, maxBatteryPercent (nur Akkus bis zu diesem Prozentwert), onlyProblems=1 (Akku unter 60 % oder TPM nicht aktiv bzw. nicht 2.0). SMART-Werte der Festplatten fehlen, wenn ACMP sie nicht inventarisiert. Read-only.",
+        "sql":  "SELECT TOP (CASE WHEN @limit BETWEEN 1 AND 2000 THEN @limit ELSE 500 END) c.COMPUTERNAME AS Rechner, CASE WHEN b.BATTERYEXISTS = 1 THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END AS Akku, CAST(ROUND((100.0 * b.FullChargeCapacity / NULLIF(b.DesignCapacity, 0)), 0) AS int) AS AkkuKapazitaetProzent, b.DesignCapacity AS AkkuDesignMWh, b.FullChargeCapacity AS AkkuVollMWh, b.Name AS AkkuName, t.Version AS TpmVersion, CASE WHEN t.ClientId IS NULL THEN \u0027nicht inventarisiert\u0027 WHEN t.IsEnabled = 1 AND t.IsActivated = 1 THEN \u0027aktiv\u0027 ELSE \u0027nicht aktiv\u0027 END AS Tpm, t.Manufacturer AS TpmHersteller, t.ManufacturerVersion AS TpmFirmware FROM CLT_CLIENTS_TABLE c LEFT JOIN CLT_HDW_BATTERY b ON b.CLIENTID = c.CLIENTID LEFT JOIN CLT_Tpm t ON t.ClientId = c.CLIENTID WHERE c.IsRetired = 0 AND (b.CLIENTID IS NOT NULL OR t.ClientId IS NOT NULL) AND (@client IS NULL OR c.CLIENTID = @client) AND (@maxBatteryPercent IS NULL OR (100.0 * b.FullChargeCapacity / NULLIF(b.DesignCapacity, 0)) \u003c= @maxBatteryPercent) AND (ISNULL(@onlyProblems, 0) = 0 OR (100.0 * b.FullChargeCapacity / NULLIF(b.DesignCapacity, 0)) \u003c 60 OR (t.ClientId IS NOT NULL AND (t.IsEnabled = 0 OR t.IsActivated = 0 OR ISNULL(t.Version, \u0027\u0027) NOT LIKE \u00272%\u0027))) ORDER BY CASE WHEN (100.0 * b.FullChargeCapacity / NULLIF(b.DesignCapacity, 0)) IS NULL THEN 999 ELSE (100.0 * b.FullChargeCapacity / NULLIF(b.DesignCapacity, 0)) END, c.COMPUTERNAME",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  false,
+                         "kind":  "client",
+                         "description":  "Optional: Computername oder ClientId."
+                     },
+                     {
+                         "name":  "maxBatteryPercent",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Optional: nur Akkus mit hoechstens so viel Prozent Restkapazitaet, z.B. 60."
+                     },
+                     {
+                         "name":  "onlyProblems",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Akku unter 60 % oder TPM nicht aktiv bzw. nicht Version 2."
+                     },
+                     {
+                         "name":  "limit",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Hoechstzahl Zeilen, 1-2000, Standard 500.",
+                         "default":  "500"
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_security_profiles",
+        "description":  "BitLocker- und Defender-Management von ACMP: welche Konfigurationsprofile es gibt, welchen Containern sie zugeordnet sind und was sie einstellen (SYS_Sec_BitLocker_*, SYS_Sec_Defender_*). Zeilen: Art BitLocker (Profil, Container, Anzahl = Clients, die das Profil zuletzt angewandt haben, Systemlaufwerk/Datenlaufwerke/Verfahren/Wechseldatentraeger), Defender (Profil, Container, Zahl der aktiv gesetzten Einstellungen), Defender-Ausnahmen (Ausnahmelisten, Anzahl = Eintraege) und BitLocker-Stand (Anzahl = Clients mit BitLocker-Status, davon von ACMP verwaltet). Keine Wiederherstellungsschluessel. Den Laufwerksstand je Client zeigt acmp_bitlocker_status. Read-only.",
+        "sql":  "SELECT r.Art, r.Profil, r.Container, r.Anzahl, r.Einstellungen FROM (SELECT 1 AS Sortierung, \u0027BitLocker\u0027 AS Art, p.Name AS Profil, ISNULL(STUFF((SELECT \u0027, \u0027 + ISNULL(NULLIF(cs.Path, \u0027\u0027), ISNULL(cs.Name, CAST(pc.ContainerId AS varchar(36)))) FROM SYS_Sec_BitLocker_ConfigurationProfiles_Containers pc LEFT JOIN CLT_CONTAINER_STRUCTURE cs ON cs.ContainerID = pc.ContainerId WHERE pc.ProfileId = p.Id FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027(keinem Container zugeordnet)\u0027) AS Container, (SELECT COUNT(*) FROM CLT_Sec_BitLocker_Status s WHERE s.LastUsedProfileId = p.Id) AS Anzahl, \u0027Systemlaufwerk: \u0027 + CASE WHEN sd.IsActive = 1 THEN \u0027verschluesseln (\u0027 + CASE sd.EncryptionMethod WHEN 1 THEN \u0027AES128\u0027 WHEN 2 THEN \u0027AES256\u0027 WHEN 3 THEN \u0027XTS AES128\u0027 WHEN 4 THEN \u0027XTS AES256\u0027 ELSE \u0027Methode \u0027 + CAST(sd.EncryptionMethod AS varchar(5)) END + \u0027)\u0027 ELSE \u0027aus\u0027 END + \u0027; Datenlaufwerke: \u0027 + CASE WHEN hd.IsActive = 1 THEN \u0027verschluesseln (\u0027 + CASE hd.EncryptionMethod WHEN 1 THEN \u0027AES128\u0027 WHEN 2 THEN \u0027AES256\u0027 WHEN 3 THEN \u0027XTS AES128\u0027 WHEN 4 THEN \u0027XTS AES256\u0027 ELSE \u0027Methode \u0027 + CAST(hd.EncryptionMethod AS varchar(5)) END + \u0027)\u0027 ELSE \u0027aus\u0027 END + CASE WHEN p.DenyWriteOnUnencryptedRemovableMedia = 1 THEN \u0027; unverschluesselte Wechseldatentraeger nur lesen\u0027 ELSE \u0027\u0027 END AS Einstellungen FROM SYS_Sec_BitLocker_ConfigurationProfiles p LEFT JOIN SYS_Sec_BitLocker_DriveSettings sd ON sd.Id = p.SystemDriveSettingsId LEFT JOIN SYS_Sec_BitLocker_DriveSettings hd ON hd.Id = p.HardDriveSettingsId UNION ALL SELECT 2, \u0027Defender\u0027, p.Name, ISNULL(STUFF((SELECT \u0027, \u0027 + ISNULL(NULLIF(cs.Path, \u0027\u0027), ISNULL(cs.Name, CAST(pc.ContainerId AS varchar(36)))) FROM SYS_Sec_Defender_ConfigurationProfiles_Containers pc LEFT JOIN CLT_CONTAINER_STRUCTURE cs ON cs.ContainerID = pc.ContainerId WHERE pc.ProfileId = p.Id FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027(keinem Container zugeordnet)\u0027), NULL, CAST((SELECT COUNT(*) FROM SYS_Sec_Defender_ConfigurationProfiles_SettingsAssignments a WHERE a.ProfileId = p.Id AND a.IsActive = 1) AS varchar(10)) + \u0027 Einstellungen aktiv gesetzt\u0027 FROM SYS_Sec_Defender_ConfigurationProfiles p UNION ALL SELECT 3, \u0027Defender-Ausnahmen\u0027, x.Name, \u0027(Ausnahmeliste)\u0027, (SELECT COUNT(*) FROM SYS_Sec_Defender_Exclusions e WHERE e.CollectionId = x.Id), ISNULL(x.Description, \u0027\u0027) FROM SYS_Sec_Defender_ExclusionCollections x UNION ALL SELECT 4, \u0027BitLocker-Stand\u0027, \u0027alle Clients\u0027, \u0027\u0027, COUNT(*), \u0027von ACMP verwaltet: \u0027 + CAST(SUM(CASE WHEN s.IsManagedByAcmp = 1 THEN 1 ELSE 0 END) AS varchar(10)) + \u0027, nicht verwaltet: \u0027 + CAST(SUM(CASE WHEN s.IsManagedByAcmp = 1 THEN 0 ELSE 1 END) AS varchar(10)) FROM CLT_Sec_BitLocker_Status s JOIN CLT_CLIENTS_TABLE c ON c.CLIENTID = s.ClientId AND c.IsRetired = 0) r ORDER BY r.Sortierung, r.Profil",
+        "args":  [
+
+                 ]
+    },
+    {
+        "name":  "acmp_console_users",
+        "description":  "Benutzer und Benutzergruppen der ACMP-Console (SYS_USERS, SYS_GROUPS, SYS_USER_IN_GROUP, SYS_Groups_AD_Mapping) fuer einen Rechte-Ueberblick: Art (Benutzer/Gruppe), Name, Domaene, Beschreibung, E-Mail, Rolle (Zahl wie in der DB), angemeldet (mit Rechner), Gruppen eines Benutzers bzw. Mitglieder und AD-Gruppen-Zuordnung einer Gruppe, MFA erzwungen. Keine Kennwoerter oder Hashes. Read-only.",
+        "sql":  "SELECT * FROM (SELECT \u0027Benutzer\u0027 AS Art, u.USERNAME AS Name, ISNULL(u.DomainName, \u0027\u0027) AS Domaene, ISNULL(u.DESCRIPTION, \u0027\u0027) AS Beschreibung, ISNULL(u.EMail, \u0027\u0027) AS EMail, u.Role AS Rolle, CASE WHEN u.ISLOGGEDIN = 1 THEN \u0027ja (\u0027 + ISNULL(u.LogonMachine, \u0027\u0027) + \u0027)\u0027 ELSE \u0027nein\u0027 END AS Angemeldet, ISNULL(STUFF((SELECT \u0027, \u0027 + g.GROUP_NAME FROM SYS_USER_IN_GROUP ug JOIN SYS_GROUPS g ON g.GROUP_GUID = ug.GROUP_GUID WHERE ug.USER_GUID = u.USER_GUID ORDER BY g.GROUP_NAME FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027\u0027) AS GruppenOderMitglieder, \u0027\u0027 AS Mfa FROM SYS_USERS u UNION ALL SELECT \u0027Gruppe\u0027, g.GROUP_NAME, ISNULL((SELECT TOP 1 m.DomainName FROM SYS_Groups_AD_Mapping m WHERE m.AcmpGroupId = g.GROUP_GUID), \u0027\u0027), ISNULL(g.Description, \u0027\u0027), \u0027\u0027, g.Role, \u0027\u0027, ISNULL(STUFF((SELECT \u0027, \u0027 + u.USERNAME FROM SYS_USER_IN_GROUP ug JOIN SYS_USERS u ON u.USER_GUID = ug.USER_GUID WHERE ug.GROUP_GUID = g.GROUP_GUID ORDER BY u.USERNAME FOR XML PATH(\u0027\u0027), TYPE).value(\u0027.\u0027, \u0027nvarchar(max)\u0027), 1, 2, \u0027\u0027), \u0027\u0027) + CASE WHEN EXISTS (SELECT 1 FROM SYS_Groups_AD_Mapping m WHERE m.AcmpGroupId = g.GROUP_GUID) THEN \u0027 (+ AD-Gruppe)\u0027 ELSE \u0027\u0027 END, CASE WHEN g.EnforceMFA = 1 THEN \u0027ja\u0027 ELSE \u0027nein\u0027 END FROM SYS_GROUPS g) r ORDER BY r.Art, r.Name",
+        "args":  [
+
                  ]
     }
 ]

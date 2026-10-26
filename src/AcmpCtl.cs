@@ -276,6 +276,119 @@ class AcmpCtl
         }
     }
 
+    // ================= Suchen (acmp_lib_search, Erweiterung 25.10.2026) =================
+    // Index der Vorlagen: bei https-Quellen der Index der CTL-Webseite (GitHub Pages baut ihn aus dem Repo, im Repo selbst liegt er nicht),
+    // bei lokalen Quellen die template.json unter <quelle>\templates\<id>\. Erste Quelle mit einer id gewinnt (Reihenfolge wie beim Installieren).
+    public const string DefaultIndexUrl = "https://herzog-gmbh.github.io/acmp-ctl/index.json";
+
+    static bool Has(JToken t, string q)
+    {
+        if (t == null || t.Type == JTokenType.Null) return false;
+        string s = t.Type == JTokenType.String ? (string)t : t.ToString(Formatting.None);
+        return s.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    static string TStr(JToken t) { return t != null && t.Type == JTokenType.String ? (string)t : null; }
+
+    static JObject SearchHit(JObject t, string where, Dictionary<string, string> installed)
+    {
+        var o = new JObject();
+        string id = TStr(t["id"]);
+        o["id"] = id; o["version"] = t["version"]; o["status"] = t["status"]; o["name"] = t["name"];
+        string sum = TStr(t["summary"]) ?? "";
+        o["kurz"] = sum.Length > 300 ? sum.Substring(0, 300) + " ..." : sum;
+        if (t["category"] != null) o["kategorie"] = t["category"];
+        if (t["area"] != null) o["bereich"] = t["area"];
+        if (t["tags"] is JArray) o["tags"] = t["tags"];
+        var pars = new JArray();
+        if (t["parameters"] is JArray) foreach (JToken p in (JArray)t["parameters"]) if (p is JObject && p["name"] != null) pars.Add((string)p["name"] + (p["required"] != null && p["required"].Type == JTokenType.Boolean && (bool)p["required"] ? " (Pflicht)" : ""));
+        if (pars.Count > 0) o["parameter"] = pars;
+        var need = new List<string>();
+        JToken req = t["requires"];
+        if (req != null && req["customFields"] is JArray && ((JArray)req["customFields"]).Count > 0) need.Add(((JArray)req["customFields"]).Count + " individuelle(s) Feld(er)");
+        if (req != null && req["globalAccount"] != null && req["globalAccount"].Type == JTokenType.String && ((string)req["globalAccount"]).Length > 0) need.Add("globalen Account (globalAccountId)");
+        if (t["files"] is JArray && ((JArray)t["files"]).Count > 0) need.Add(((JArray)t["files"]).Count + " Datei(en)");
+        if (need.Count > 0) o["braucht"] = string.Join(", ", need.ToArray());
+        if (t["stepCount"] != null) o["schritte"] = t["stepCount"];
+        if (t["acmp"] != null && t["acmp"]["minVersion"] != null) o["abAcmp"] = t["acmp"]["minVersion"];
+        string iv; if (id != null && installed.TryGetValue(id, out iv)) o["installiert"] = iv;
+        o["quelle"] = where;
+        return o;
+    }
+
+    public JObject Search(JObject a)
+    {
+        string q = a["query"] != null && a["query"].Type == JTokenType.String ? ((string)a["query"]).Trim() : "";
+        string cat = a["category"] != null && a["category"].Type == JTokenType.String ? ((string)a["category"]).Trim() : "";
+        int top = 30; if (a["top"] != null && a["top"].Type == JTokenType.Integer) top = Math.Max(1, Math.Min(200, (int)a["top"]));
+        string[] words = q.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        // zuletzt installierte Version je Vorlage (ctl-installs.json: template = "<id>@<version>")
+        var installed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (File.Exists(_logFile))
+                foreach (JToken e in JArray.Parse(File.ReadAllText(_logFile)))
+                {
+                    string tv = (string)e["template"]; if (string.IsNullOrEmpty(tv)) continue;
+                    int at = tv.LastIndexOf('@');
+                    string tid = at > 0 ? tv.Substring(0, at) : tv, ver = at > 0 ? tv.Substring(at + 1) : "?";
+                    JToken it = e["installed"];   // JArray.Parse macht aus dem ISO-Text ein Datum - selbst formatieren, nicht nach Kultur
+                    string when = it == null || it.Type == JTokenType.Null ? "?" : it.Type == JTokenType.Date
+                        ? ((DateTime)it).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : (string)it;
+                    installed[tid] = ver + " am " + when + " als \"" + ((string)e["name"] ?? "?") + "\"";
+                }
+        }
+        catch { }
+        var hits = new JArray(); var src = new JArray(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int total = 0;
+        foreach (string s in _sources)
+        {
+            var list = new List<JObject>(); string where;
+            try
+            {
+                if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    string url = s.TrimEnd('/') == DefaultSource ? DefaultIndexUrl : s.TrimEnd('/') + "/index.json";
+                    JObject idx = JObject.Parse(Download(url));
+                    if (idx["templates"] is JArray) foreach (JToken t in (JArray)idx["templates"]) if (t is JObject) list.Add((JObject)t);
+                    where = url;
+                    src.Add(url + ": " + list.Count + " Vorlagen" + (idx["generated"] != null ? ", Stand " + idx["generated"] : ""));
+                }
+                else
+                {
+                    string dir = Path.Combine(s, "templates");
+                    where = dir;
+                    if (!Directory.Exists(dir)) { src.Add(dir + ": nicht vorhanden"); continue; }
+                    foreach (string d in Directory.GetDirectories(dir))
+                    {
+                        string f = Path.Combine(d, "template.json");
+                        if (!File.Exists(f)) continue;
+                        try { list.Add(JObject.Parse(File.ReadAllText(f))); } catch { }
+                    }
+                    src.Add(dir + ": " + list.Count + " Vorlagen");
+                }
+            }
+            catch (Exception ex) { src.Add(s + ": nicht lesbar (" + ex.Message + ")"); continue; }
+            foreach (JObject t in list)
+            {
+                string id = TStr(t["id"]);
+                if (string.IsNullOrEmpty(id) || !seen.Add(id)) continue;
+                total++;
+                if (cat.Length > 0 && !string.Equals(TStr(t["category"]), cat, StringComparison.OrdinalIgnoreCase) && !string.Equals(TStr(t["area"]), cat, StringComparison.OrdinalIgnoreCase)) continue;
+                bool ok = true;
+                foreach (string w in words)
+                    if (!(Has(t["id"], w) || Has(t["name"], w) || Has(t["summary"], w) || Has(t["tags"], w) || Has(t["applications"], w) || Has(t["category"], w))) { ok = false; break; }
+                if (!ok) continue;
+                if (hits.Count < top) hits.Add(SearchHit(t, where, installed));
+            }
+        }
+        var res = new JObject();
+        res["treffer"] = hits.Count; res["vorlagenGesamt"] = total; res["vorlagen"] = hits; res["quellen"] = src;
+        res["hinweis"] = hits.Count == 0 ? "Nichts gefunden - kuerzeren Suchbegriff oder ohne query (alle Vorlagen) versuchen." :
+            "Installieren: acmp_lib_install id=<id> folder=<Ordner> (erst dryRun=true). Beschreibung und Schritte: Webseite der CTL oder template.json der Quelle.";
+        return res;
+    }
+
     // ================= Pruefen =================
 
     static void Validate(JObject tpl, JObject a, List<string> p)

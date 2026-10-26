@@ -15,7 +15,7 @@ using System.Security.Cryptography.X509Certificates;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-static class AcmpMcp
+static partial class AcmpMcp
 {
     const string SicsDir = @"C:\Program Files (x86)\Aagon\AESB SICS\SICS";
     [ThreadStatic] static AcmpConn _currentConn;          // pro Request/Job aktive Pro-User-Verbindung
@@ -33,9 +33,12 @@ static class AcmpMcp
     static AcmpCtl CTL;             // Vorlagen aus der ACMP CTL als Entwurf installieren (nutzt CCW, ctl-Section optional)
     static AcmpKiosk KIOSK;         // ACMP-Kiosk lesen und Eintraege/Filter schreiben (kioskWriter-Section, Schreib-Login wie ccWriter)
     static AcmpWum WUM;             // Windows-Updates (CAWUM) ablehnen / Ablehnung aufheben (wumWriter-Section, Schreib-Login wie ccWriter)
+    static AcmpWumRings RINGS;      // Verteilungsringe der Updates lesen, anhalten, freigeben (wumWriter-Section) und Regeln des Fehler-Stopps
+    static AcmpWumWatch WATCH;      // Waechter des Fehler-Stopps (wumWatch-Section): stuendlich pruefen, anhalten, melden
     static AcmpUnix UNIX;           // Unix Scripts lesen und schreiben (unixWriter-Section, Schreib-Login wie ccWriter)
     static AcmpCustomFields CF;     // individuelle Felder lesen und anlegen (cfWriter-Section, Schreib-Login wie ccWriter)
     static AcmpJobs JOBS;           // Dauerauftraege (Jobs an Containern) lesen: acmp_jobs, acmp_get_jobs
+    static AcmpOpenItems OPEN;      // gemeinsame Liste "Offene Punkte" (offene-punkte.json): acmp_open_items, acmp_open_item_set, Dashboard
     static JArray DbToolDefs;  // nicht inline initialisieren (laeuft sonst im .cctor vor dem AssemblyResolve-Handler)
     static JArray ApiToolDefs; // datengetriebene API-Tools aus api-tools.json (Public-API-Kommandos ohne Recompile)
     static string ApiKey;
@@ -69,12 +72,30 @@ static class AcmpMcp
         { "acmp_kiosk_remove_image", "Write" },     { "acmp_kiosk_add_group", "Write" },
         { "acmp_kiosk_update_items", "Write" },     { "acmp_kiosk_update_group", "Write" },
         { "acmp_wum_decline", "Write" },            { "acmp_wum_restore", "Write" },
+        { "acmp_wum_ring_hold", "Write" },          // Uebergang anhalten (Update bleibt im Testring)
+        { "acmp_wum_ring_release", "Destructive" }, // weiterlaufen lassen bzw. sofort an alle freigeben
         { "acmp_cf_create", "Write" },              { "acmp_cc_set_parameters", "Write" },
         { "acmp_unix_script_create", "Write" },     { "acmp_unix_script_new_version", "Write" },
         { "acmp_unix_script_set_ring", "Write" },
         { "acmp_job_set_enabled", "Write" },        { "acmp_job_delete", "Destructive" },
         { "acmp_job_restore", "Write" },            { "acmp_container_set_restriction", "Write" },
         { "acmp_job_set_condition", "Destructive" }, // kann Jobs auf allen Mitgliedern des Containers (wieder) starten
+        { "acmp_container_set_filter", "Destructive" }, // neue Mitglieder bekommen die Jobs des Containers
+        { "acmp_msw_job_create", "Destructive" },   // installiert/aktualisiert Software auf allen Mitgliedern des Containers
+        { "acmp_job_create", "Destructive" },       // Client Command laeuft auf allen Mitgliedern des Containers (AcmpLuecken.cs)
+        { "acmp_delete_clients", "Destructive" },   // DeleteClients, nicht rueckgaengig (AcmpLueckenApi.cs)
+        { "acmp_cf_set_value", "Write" },           // SaveSingleCustomFieldValues, alter Wert in der Antwort
+        { "acmp_send_report", "Write" },            // SendReports: Bericht per Mail an interne Adressen
+        { "acmp_msw_test_install", "Destructive" }, // installiert Software auf 1-5 Clients
+        { "acmp_msw_subscribe", "Write" },          // Abo; Herunterladen erledigt der ACMP-Server
+        { "acmp_open_item_set", "Write" },          // offene-punkte.json im Server-Ordner
+        // Erweiterung 25.10.2026 (AcmpLueckenWrite.cs)
+        { "acmp_cc_delete", "Destructive" },        { "acmp_cc_delete_folder", "Destructive" },
+        { "acmp_kiosk_delete_group", "Destructive" }, { "acmp_unix_script_delete", "Destructive" },
+        { "acmp_maintenance_window_create", "Write" }, { "acmp_maintenance_window_delete", "Destructive" },
+        { "acmp_maintenance_window_assign", "Destructive" }, // Jobs 'In Wartungsfenstern' laufen dann zu anderen Zeiten
+        { "acmp_container_security_profile", "Destructive" }, // BitLocker/Defender auf allen Mitgliedern
+        { "acmp_agent_template_assign", "Destructive" },      // Scanner-Plan aller Mitglieder
         { "acmp_read_registry", "Write" },          // festes Lese-Skript, laeuft aber als Job auf dem Client
     };
     static string TicketCreatedStateId = "{0E9A3C65-5EA3-42BE-80E9-B71A2C4F01C2}"; // Ticketstatus "Erstellt" fuer neue Tickets (Config: helpdesk.createdStateId)
@@ -212,6 +233,19 @@ static class AcmpMcp
         DB = new AcmpDb(dbCs);
         Log("DB-Report-Tools: " + (DB.Enabled ? "aktiv" : "aus (keine db.connectionString gesetzt)"));
         JOBS = new AcmpJobs(dbCs, new Action<string>(Log));
+        AcmpJobs.GuardTargets = new Action<string>(GuardProtectedTargets);   // MSW-Testauftrag: keine Jobs auf den ACMP-/MCP-Server
+        if (PsCommandId != null && AcmpJobs.GuidBraces(PsCommandId) != null) AcmpJobs.ProtectedCcIds.Add(AcmpJobs.GuidBraces(PsCommandId));   // acmp_cc_delete: Vorlage von acmp_run_powershell
+        JObject ccwCfg = cfg["ccWriter"] as JObject;   // acmp_cc_delete: Vorlage des CC-Writers
+        string tplId = ccwCfg != null && ccwCfg["templateScriptId"] != null ? AcmpJobs.GuidBraces((string)ccwCfg["templateScriptId"]) : null;
+        if (tplId != null) AcmpJobs.ProtectedCcIds.Add(tplId);
+        JObject repCfg = cfg["reports"] as JObject;   // acmp_send_report: erlaubte Mail-Domains
+        JArray repDom = repCfg != null ? repCfg["allowedMailDomains"] as JArray : null;
+        if (repDom != null)
+        {
+            var dl = new List<string>();
+            foreach (JToken t in repDom) { string d = t.Type == JTokenType.String ? ((string)t).Trim().TrimStart('@').ToLowerInvariant() : ""; if (d.Length > 0 && !d.StartsWith("hier_") && !dl.Contains(d)) dl.Add(d); }
+            ReportMailDomains = dl.ToArray();
+        }
         CCW = new AcmpCcWriter(dbCs, cfg["ccWriter"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
         if (!CCW.ConfigOk) Log("CC-Schreiben: aus (" + CCW.DisabledReason + ")");
         else
@@ -279,6 +313,20 @@ static class AcmpMcp
             }
             catch (Exception ex) { Log("Updates ablehnen (WUM): Vorpruefung fehlgeschlagen: " + ex.Message); }
         }
+        RINGS = new AcmpWumRings(dbCs, cfg["wumWriter"] as JObject, cfg["ccWriter"] as JObject, cfg["wumWatch"] as JObject, cfgDir, new Action<string>(Log), new Func<string>(AcmpVersionString));
+        if (!RINGS.ConfigOk) Log("Update-Ringe aendern: aus (" + RINGS.DisabledReason + "); lesen (acmp_wum_rings) geht");
+        else
+        {
+            try
+            {
+                JObject rpf = RINGS.Preflight(true);
+                var rnotes = new List<string>();
+                foreach (JObject ck in (JArray)rpf["checks"]) if ((string)ck["result"] != "ok") rnotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
+                Log("Update-Ringe (acmp_wum_ring_hold / _release): anhalten " + (rpf["holdTool"] != null && (bool)rpf["holdTool"] ? "AKTIV" : "GESPERRT") +
+                    ", sofort freigeben " + (rpf["releaseTool"] != null && (bool)rpf["releaseTool"] ? "AKTIV" : "GESPERRT") + (rnotes.Count > 0 ? " | " + string.Join(" | ", rnotes.ToArray()) : ""));
+            }
+            catch (Exception ex) { Log("Update-Ringe: Vorpruefung fehlgeschlagen: " + ex.Message); }
+        }
         JOBS.ConfigureWriter(cfg["jobWriter"] as JObject, cfg["ccWriter"] as JObject, cfgDir, new Func<string>(AcmpVersionString));
         if (!JOBS.WriterConfigOk) Log("Jobs schreiben: aus (" + JOBS.WriterDisabledReason + "); lesen (acmp_jobs, acmp_get_jobs) geht");
         else
@@ -290,8 +338,10 @@ static class AcmpMcp
                 foreach (JObject ck in (JArray)jpf["checks"]) if ((string)ck["result"] != "ok") jnotes.Add((string)ck["check"] + ": " + (string)ck["detail"]);
                 Func<string, string> jst = k => jpf[k] != null && (bool)jpf[k] ? "AKTIV" : "GESPERRT";
                 Log("Jobs schreiben (dryRun-Vorschau, dann direkt mit Sicherung): abschalten/einschalten " + jst("setEnabledTool") + ", Startbedingung " + jst("conditionTool") + ", loeschen " + jst("deleteTool") +
-                    ", zuruecknehmen " + jst("restoreTool") + ", Client-Beschraenkung " + jst("restrictionTool") +
+                    ", zuruecknehmen " + jst("restoreTool") + ", Client-Beschraenkung " + jst("restrictionTool") + ", Container-Filter " + jst("filterTool") +
                     (jnotes.Count > 0 ? " | " + string.Join(" | ", jnotes.ToArray()) : ""));
+                Log("Managed Software (acmp_msw_*): Dauerauftrag " + jst("mswJobTool") + ", Testauftrag " + jst("mswTestTool") + ", Abo " + jst("subscribeTool") +
+                    ", Einzelauftraege loeschen " + jst("manualDeleteTool") + ", wiederherstellen " + jst("manualRestoreTool"));
             }
             catch (Exception ex) { Log("Jobs schreiben: Vorpruefung fehlgeschlagen: " + ex.Message); }
         }
@@ -377,7 +427,21 @@ static class AcmpMcp
         WEB.CfgPath = Path.GetFullPath(cfgPath);
         WEB.GetAllTools = delegate() { return (JArray)ToolsList()["tools"]; };
         WEB.WriteTierOf = new Func<string, string>(WriteTierOf);
+        OPEN = new AcmpOpenItems(cfgDir, new Action<string>(Log));
+        WEB.OpenItems = OPEN;
+        if (DB.Enabled) WEB.Dashboard = new AcmpDashboard(dbCs, JOBS, cfg["dashboard"] as JObject, new Action<string>(Log));
+        Log("Dashboard: " + (WEB.Dashboard != null ? "Lagebild aktiv (Zwischenspeicher " + WEB.Dashboard.Opt.CacheMinutes + " min)" : "ohne DB nur MCP-Leiste und offene Punkte") +
+            ", offene Punkte in " + AcmpOpenItems.FileName);
         PublicUrl = WEB.PublicUrl; // Basis-URL fuer den Registry-Rueckkanal (Client -> /regresult)
+        // Waechter des Fehler-Stopps (Update-Ringe): stuendlich, haelt an, meldet ueber offene Punkte und Mail; Seite /dashboard/updates
+        WATCH = new AcmpWumWatch(RINGS, cfg["wumWatch"] as JObject, cfgDir, ACTIVITY, OPEN, PublicUrl, new Action<string>(Log));
+        RINGS.OnWrite = new Action<string, string, string, string, JArray>(WATCH.NoteManual);
+        RINGS.ResumeOf = new Func<string, AcmpWumRings.ResumeInfo>(WATCH.ResumeOf);
+        RINGS.HeldByWatcher = new Func<string, bool>(WATCH.IsHeldByWatcher);
+        RINGS.BrakeActive = delegate() { return ACTIVITY.BrakeActive; };
+        WEB.Wum = RINGS; WEB.WumWatch = WATCH;
+        if (WATCH.Enabled && DB.Enabled) WATCH.Start();
+        else Log("WUM-Waechter: aus (" + (WATCH.DisabledReason ?? "keine DB") + "); Seite /dashboard/updates und acmp_wum_rings zeigen den Stand trotzdem");
         Log("Weboberflaeche: " + PublicUrl + "/dashboard (Bediener mit Web-Zugang: " + WEB.UserCount + "), Aktivitaetsprotokoll activity-JJJJ-MM.jsonl, Notbremse " +
             (ACTIVITY.BrakeActive ? "GEZOGEN - Schreib-Tools gesperrt" : "aus") + ". Schreib-Tools wirken sofort (keine Vier-Augen-Freigabe mehr).");
         if (cfg["approval"] != null)
@@ -523,6 +587,11 @@ static class AcmpMcp
         sb.Append("Access-Control-Allow-Origin: *\r\n");
         sb.Append("Access-Control-Allow-Headers: Authorization, Content-Type, Mcp-Session-Id\r\n");
         sb.Append("Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n");
+        // Der Rumpf ist immer UTF-8. Ohne charset liest z.B. Invoke-RestMethod (Windows PowerShell 5.1) JSON als ISO-8859-1 und Umlaute
+        // kommen doppelt kodiert an (gefunden 23.10.2026); deshalb bei JSON und Text immer charset=utf-8 dazu.
+        if (ctype != null && ctype.IndexOf("charset=", StringComparison.OrdinalIgnoreCase) < 0 &&
+            (ctype.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) || ctype.StartsWith("text/", StringComparison.OrdinalIgnoreCase)))
+            ctype += "; charset=utf-8";
         if (ctype != null) sb.Append("Content-Type: ").Append(ctype).Append("\r\n");
         if (extraHeaders != null) foreach (string h in extraHeaders) sb.Append(h).Append("\r\n");
         sb.Append("Content-Length: ").Append(bb.Length).Append("\r\n");
@@ -585,7 +654,8 @@ static class AcmpMcp
                     "- Assets: Liste acmp_get_asset_list ; anlegen acmp_create_asset ; aendern acmp_update_asset ; ausleihen/zurueck acmp_lend_asset/acmp_return_asset\n" +
                     "- Stammdaten lesen: acmp_get_contacts/_companies/_locations/_departments/_cost_centers/_contracts ; anlegen/aendern: acmp_create_*/acmp_update_* (contact/company/location/department)\n" +
                     "- Skript/Job auf einem Client: acmp_run_powershell bzw. acmp_enqueue_client_command\n" +
-                    "- Dauerauftraege (Jobs an Containern): Liste mit Ziel-Container, Startbedingung als Text, Laeufen/Fehlern der letzten 7/30 Tage und Hinweisen acmp_jobs (onlyNotable=true nur auffaellige) ; Jobs eines Clients acmp_get_jobs ; einzelne Laeufe acmp_job_results ; Agentenplaner/Scanner acmp_agent_tasks ; abschalten/einschalten acmp_job_set_enabled ; Startbedingung eines Containers setzen acmp_job_set_condition ; Client-Beschraenkung eines Containers acmp_container_set_restriction ; loeschen acmp_job_delete ; zuruecknehmen acmp_job_restore (alle erst dryRun=true, Vorschau dem Menschen zeigen, dann ausfuehren)\n" +
+                    "- Dauerauftraege (Jobs an Containern): Liste mit Ziel-Container, Startbedingung als Text, Laeufen/Fehlern der letzten 7/30 Tage und Hinweisen acmp_jobs (onlyNotable=true nur auffaellige) ; Jobs eines Clients acmp_get_jobs ; einzelne Laeufe acmp_job_results ; Agentenplaner/Scanner acmp_agent_tasks ; abschalten/einschalten acmp_job_set_enabled ; Startbedingung eines Containers setzen acmp_job_set_condition ; Client-Beschraenkung eines Containers acmp_container_set_restriction ; Container-Filter lesen acmp_container_filter, setzen acmp_container_set_filter ; loeschen acmp_job_delete ; zuruecknehmen acmp_job_restore (alle erst dryRun=true, Vorschau dem Menschen zeigen, dann ausfuehren)\n" +
+                    "- Managed Software (Aagon MSW): Pakete/Abos/Versionen je Ring/Updates acmp_msw_packages (catalog=true auch nicht abonnierte) ; ein Paket mit Versionsverteilung, Clients mit Update, Jobs, Parametern acmp_msw_package ; Stand eines Clients acmp_msw_client ; Dauerauftrag an einem Container anlegen acmp_msw_job_create ; einmaliger Testauftrag an 1-5 Clients acmp_msw_test_install ; abonnieren acmp_msw_subscribe ; haengende Einzelauftraege loeschen acmp_job_delete (alle Schreib-Tools erst dryRun=true)\n" +
                     "- Container: acmp_create_container/acmp_save_containers/acmp_delete_containers\n" +
                     "- Lizenzen/Einstellungen: acmp_get_licenses / acmp_get_app_settings / acmp_get_master_data_settings / acmp_get_custom_field_list\n" +
                     "- Schwachstellen/Updates/Inventar (DB-Reports): acmp_outdated_software / acmp_missing_updates / acmp_software_search\n" +
@@ -596,6 +666,7 @@ static class AcmpMcp
                     "- Kiosk-Icons: Auswahl mit Bildern acmp_kiosk_images preview=3 (where=both sucht auch Dateien, die noch nicht hochgeladen sind) und den Menschen waehlen lassen ; neues Bild hochladen acmp_kiosk_add_image (Datei vorher in den freigegebenen UNC-Ordner legen) ; Icon eines Eintrags/Ordners tauschen acmp_kiosk_set_image ; vom MCP hochgeladenes, unbenutztes Bild entfernen acmp_kiosk_remove_image\n" +
                     "- Unix Scripts (Linux/macOS mit ACMP Unix Agent): lesen acmp_unix_scripts ; Ergebnisse/Ausgabe acmp_unix_results ; anlegen acmp_unix_script_create ; neue Version acmp_unix_script_new_version ; Verteilungsring/Freigabe acmp_unix_script_set_ring (alle drei erst dryRun=true und die Vorschau zeigen). Unix-Jobs STARTET der Mensch in der Console (Container/Abfrage -> Unix-Jobs ausfuehren), nicht der MCP.\n" +
                     "- Individuelle Felder (Custom Fields): Baum, Spalten und Werte je Client acmp_cf_list (field=<Name> values=true zeigt die Werte und ihre Verteilung) ; neue Tabelle/Felder (Ganzzahl, Text) acmp_cf_create (erst dryRun=true und die Vorschau zeigen) ; in einem Client Command schreibt der Schritt 'Wert auf Server speichern' hinein - Kurzform in acmp_cc_new_version/acmp_cc_create_draft: {\"class\":\"TStoreValueOnACMPServer\",\"fields\":{\"CustomField\":\"<Feld>\",\"Table\":\"<Tabelle>\",\"Value\":\"%VAR%\"}}\n" +
+                    "- Offene Punkte (gemeinsame Liste der IT, steht im Dashboard der Webseite): lesen acmp_open_items ; anlegen/aendern/erledigen acmp_open_item_set (action=anlegen|aendern|erledigen|oeffnen). Bleibt am Ende einer Arbeit etwas offen, das das IT-Team sehen soll (Folgeaufgabe, Nachpruefung, Entscheidung), lege es mit acmp_open_item_set an (titel, bereich, prio, details, sitzung = Name der Sitzung bzw. des Chats); vorher mit acmp_open_items pruefen, ob es ihn schon gibt; Erledigtes schliessen. Keine Kennwoerter oder Schluessel in die Texte.\n" +
                     "- Parameter eines Client Commands (Abfrage beim Job-Anlegen und im Kiosk: Text, Auswahl, Kontrollkaestchen auf Projektvariablen): lesen acmp_cc_parameters ; setzen acmp_cc_set_parameters (vollstaendige Liste, erst dryRun=true und die Vorschau zeigen)\n" +
                     "Tool-Name unbekannt: tools/list zeigt alle Tools, acmp_describe { command } zeigt Details. Es ist fast immer besser, ein vorhandenes Tool zu nutzen, als eine Aufgabe ohne Tool zu loesen.";
                 return JsonRpcResult(idTok, r);
@@ -734,6 +805,46 @@ static class AcmpMcp
         tools.Add(Tool("acmp_delete_containers",
             "(LOESCHT, wirkt sofort) Loescht Container (DeleteContainers). Nicht rueckgaengig zu machen - vorher mit dem Menschen abstimmen.",
             delContProps, null));
+
+        // ---------- Erweiterung 25.10.2026 (AcmpLueckenApi.cs) ----------
+        var dcl = new JObject();
+        dcl["clients"] = Prop("array", "Pflicht: 1-" + MaxDeleteClients + " Computernamen oder ClientIds, z.B. [\"[NETWORK BOOT] 00-11-22-33-44-55\"]. Mehrdeutige Namen nur per ClientId.");
+        ((JObject)dcl["clients"])["items"] = new JObject(new JProperty("type", "string"));
+        dcl["force"] = Prop("boolean", "true = auch Clients loeschen, die online sind oder in den letzten " + RecentContactDays + " Tagen Kontakt hatten. Standard false (werden abgelehnt).");
+        dcl["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (je Client Betriebssystem, letzter Kontakt, online, statische Container), nichts loeschen.");
+        dcl["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll). Pflicht beim Loeschen.");
+        tools.Add(Tool("acmp_delete_clients",
+            "(LOESCHT, wirkt sofort, nicht rueckgaengig) Entfernt Clients aus ACMP wie 'Client loeschen' in der Console (DeleteClients der Public API): Inventar, Job-Historie, Container-Zuordnungen. " +
+            "Gedacht fuer Altlasten (ausgemusterte Rechner, [NETWORK BOOT]-Eintraege, Scan-Clients). Abgelehnt werden geschuetzte Clients (ACMP-/MCP-Server), Clients, die online sind oder in den letzten " +
+            RecentContactDays + " Tagen Kontakt hatten (ausser force=true), und mehrdeutige Namen. Erst dryRun=true und die Vorschau dem Menschen zeigen; ohne dryRun wird sofort geloescht " +
+            "(Stammdaten vorher in client-deletes\\ gesichert, danach Kontrolle in der DB). Ein Client mit Agent meldet sich spaeter mit neuer ClientId neu an.",
+            dcl, new[] { "clients" }));
+        var csv = new JObject();
+        csv["client"] = Prop("string", "Pflicht: Computername oder ClientId.");
+        csv["field"] = Prop("string", "Pflicht: individuelles Feld - Name wie in der Console/acmp_cf_list (z.B. 'Scan Status') oder Feld-Id.");
+        csv["value"] = Prop("string", "Neuer Wert als Text (Zahlenfelder: Ziffern im Bereich des Felds). Leer = Feld leeren (bei Zahlenfeldern dasselbe wie 0).");
+        csv["dryRun"] = Prop("boolean", "true = nur alten und neuen Wert zeigen, nichts schreiben.");
+        csv["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+        tools.Add(Tool("acmp_cf_set_value",
+            "(SCHREIBT) Setzt den Wert eines individuellen Felds (Custom Field) bei einem Client wie die Console bzw. ein Client Command mit 'Wert auf Server speichern' - ohne Skriptlauf " +
+            "(SaveSingleCustomFieldValues der Public API). Liest vorher den alten Wert (GetSingleCustomFieldValueLists), prueft Laenge, Zahlenbereich, Auswahlliste und ob das Feld zum Client gehoert, liest danach zur Kontrolle nach. " +
+            "Die Antwort nennt den alten Wert und den Aufruf zum Zuruecksetzen. Felder anlegen: acmp_cf_create; Werte ansehen: acmp_cf_list.",
+            csv, new[] { "client", "field" }));
+        var srp = new JObject();
+        srp["report"] = Prop("string", "Pflicht: Bericht - Name wie in der Console unter Berichte oder Report-Id.");
+        srp["to"] = Prop("array", "Pflicht: Empfaenger, nur Adressen in " + ReportDomainsText() + ", z.B. [\"it@example.com\"].");
+        ((JObject)srp["to"])["items"] = new JObject(new JProperty("type", "string"));
+        srp["cc"] = Prop("array", "Optional: weitere Empfaenger (CC), gleiche Regel.");
+        ((JObject)srp["cc"])["items"] = new JObject(new JProperty("type", "string"));
+        srp["reportFormat"] = Prop("string", "Optional: Dateiformat des Berichts - pdf (Standard), xlsx, csv, html, docx, rtf, xml, pptx, ods, odt, txt. ('format' ist wie bei allen Tools das Antwortformat.)");
+        srp["subject"] = Prop("string", "Optional: Betreff (Standard 'ACMP-Bericht <Name>').");
+        srp["body"] = Prop("string", "Optional: Mailtext.");
+        srp["dryRun"] = Prop("boolean", "true = nur pruefen (Bericht gefunden, Empfaenger erlaubt), nichts senden.");
+        srp["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+        tools.Add(Tool("acmp_send_report",
+            "(SENDET MAIL) Laesst den ACMP-Server einen Bericht der Console erzeugen und per Mail verschicken (SendReports der Public API) - z.B. einen geplanten Bericht sofort statt erst zum naechsten Plan. " +
+            "Nur an interne Adressen (" + ReportDomainsText() + "). Haengt die Mail, zeigt acmp_mail_queue den Grund. Empfaenger und Inhalt vorher mit dem Menschen abstimmen.",
+            srp, new[] { "report", "to" }));
         var ccProps = new JObject();
         ccProps["name"]     = Prop("string", "Name des neuen Containers. Pflicht.");
         ccProps["parentId"] = Prop("string", "Eltern-Container-GUID. Optional - ohne Angabe wird ein Root-Container angelegt.");
@@ -925,9 +1036,10 @@ static class AcmpMcp
         utProps["id"]         = Prop("string",  "Ticket-GUID oder IntTicketId. Pflicht.");
         utProps["assigneeId"] = Prop("string",  "Neuer Bearbeiter-GUID. Optional.");
         utProps["priority"]   = Prop("integer", "Neue Prioritaet 0-3. Optional.");
+        utProps["categoryId"] = Prop("string",  "Neue Kategorie-GUID (aus acmp_get_ticket_categories). Optional.");
         utProps["intent"]     = Prop("string",  "Was/warum (fuers Aktivitaetsprotokoll). Empfohlen.");
         tools.Add(Tool("acmp_update_ticket",
-            "(SCHREIBT) Ticket: Bearbeiter/Prioritaet aendern. Min. 1 Feld. Status aendern via acmp_close_ticket/acmp_reopen_ticket. SaveTicket v4.",
+            "(SCHREIBT) Ticket: Bearbeiter, Prioritaet und/oder Kategorie aendern. Min. 1 Feld. Status aendern via acmp_close_ticket/acmp_reopen_ticket. SaveTicket v4.",
             utProps, new[] { "id" }));
 
         var osProps = new JObject();
@@ -1137,6 +1249,15 @@ static class AcmpMcp
                 "Dateien der Vorlage (files: url = Download beim Hersteller, nur https; path = Datei im Vorlagen-Ordner) laedt der Server schon beim dryRun, prueft den SHA-256 aus der Vorlage und haengt sie nach dem Anlegen an den Entwurf (Ordner private, wie acmp_cc_add_file); weicht eine Pruefsumme ab, wird nichts angelegt. " +
                 "Freigeben des Commands in der ACMP-Console.",
                 li, new[] { "folder" }));
+            var ls = new JObject();
+            ls["query"] = Prop("string", "Optional: Suchwoerter (alle muessen vorkommen) in id, Name, Kurzbeschreibung, Tags, Anwendung oder Kategorie, z.B. 'teamviewer' oder 'winget update'. Ohne: alle Vorlagen.");
+            ls["category"] = Prop("string", "Optional: nur diese Kategorie bzw. diesen Bereich, z.B. 'Software', 'Sicherheit', 'betriebssystem'.");
+            ls["top"] = Prop("integer", "Optional: hoechstens so viele Treffer (Standard 30, max. 200).");
+            tools.Add(Tool("acmp_lib_search",
+                "Sucht Vorlagen in der ACMP CTL (Community Template Library): Index der CTL-Webseite (" + AcmpCtl.DefaultIndexUrl + ") bzw. lokale Vorlagen-Ordner aus ctl.sources. " +
+                "Je Treffer id, Version, Status, Name, Kurzbeschreibung, Kategorie/Bereich, Tags, Parameter, was die Vorlage braucht (individuelle Felder, globaler Account, Dateien), Zahl der Schritte, " +
+                "Mindestversion von ACMP und ob/wann sie hier schon installiert wurde (ctl-installs.json). Installieren: acmp_lib_install. (read-only)",
+                ls, null));
         }
         if (DB != null && DB.Enabled && KIOSK != null)
         {
@@ -1322,7 +1443,7 @@ static class AcmpMcp
             nf["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
             nf["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
             tools.Add(Tool("acmp_cc_add_folder",
-                "Legt einen oder mehrere neue Client-Command-Ordner an (wie 'Ordner hinzufuegen' in der Console, Standard-Ordnersymbol), auch Unterordner von Ordnern aus demselben Auftrag; Rechte je Ordner wie der Elternordner. Ein Auftrag = eine Transaktion. Umbenennen/Verschieben: acmp_cc_update_folder; Loeschen bleibt in der Console." +
+                "Legt einen oder mehrere neue Client-Command-Ordner an (wie 'Ordner hinzufuegen' in der Console, Standard-Ordnersymbol), auch Unterordner von Ordnern aus demselben Auftrag; Rechte je Ordner wie der Elternordner. Ein Auftrag = eine Transaktion. Umbenennen/Verschieben: acmp_cc_update_folder; leere Ordner loeschen: acmp_cc_delete_folder." +
                 (CCW.MoveScope.Count > 0 ? " Nur innerhalb von ccWriter.moveScopeFolderIds." : "") + gateNote,
                 nf, null));
             var uf = new JObject();
@@ -1425,7 +1546,7 @@ static class AcmpMcp
             jp["includeManual"] = Prop("boolean", "true = auch einmalige, von Hand gestartete Jobs (IsManualJob = 1). Standard: nur Dauerauftraege.");
             jp["includeAgentTasks"] = Prop("boolean", "true = auch Agentenplaner-Aufgaben (Scanner, JobKind 11). Standard: aus, dafuer acmp_agent_tasks.");
             jp["top"] = Prop("integer", "Optional: hoechstens so viele Jobs (Standard " + AcmpJobs.DefaultListed + ", max. " + AcmpJobs.MaxListed + ").");
-            jp["status"] = Prop("boolean", "true = zusaetzlich Stand der Vorpruefung und Rechte des Schreib-Logins (acmp_job_set_enabled / _set_condition / _delete / _restore, acmp_container_set_restriction).");
+            jp["status"] = Prop("boolean", "true = zusaetzlich Stand der Vorpruefung und Rechte des Schreib-Logins (acmp_job_set_enabled / _set_condition / _delete / _restore, acmp_container_set_restriction / _set_filter).");
             tools.Add(Tool("acmp_jobs",
                 "Dauerauftraege (Jobs an Containern) aus SYS_Jobs: je Job Name, Art (Client Command, Managed Software, WUM-Sammlung, Bericht, Konfigurationsprofil), Inhalt (bei Client Commands mit freigegebener Version), " +
                 "Ziel-Container mit Pfad und Mitgliederzahl (auch laut Job-Vorlage 'Job template for container'), Startbedingung als Text (Intervall, Wochentage, Uhrzeit, Wartungsfenster, einmalig, aus/an, ignoriert Wartungsfenster) samt Console-Text, Anlagedatum, " +
@@ -1433,6 +1554,25 @@ static class AcmpMcp
                 "Nicht-Windows-Clients (Linux, [NETWORK BOOT]) im Windows-Container, dieselbe Aufgabe doppelt an mehreren Containern, Fehlerquote, Server ohne Wartungsfenster. Auffaellige zuerst; ohne Filter zusaetzlich Container mit Job-Vorlage, aber ohne Job. " +
                 "Die Job-Aktion (JobAction) bleibt ausgeblendet, weil sie Kennwoerter enthalten kann. (read-only DB)",
                 jp, null));
+
+            // ---------- Erweiterung 25.10.2026 (AcmpLuecken.cs) ----------
+            var jl = new JObject();
+            jl["client"] = Prop("string", "Computername oder ClientId - die letzten Laeufe dieses Clients (mit command eingegrenzt).");
+            jl["command"] = Prop("string", "Optional: Teil des Client-Command-Namens oder ScriptId, z.B. 'Inventar' oder 'PowerShell'.");
+            jl["resultId"] = Prop("string", "Statt client: genau dieser Lauf (RESULTID aus acmp_script_history).");
+            jl["jobExecId"] = Prop("string", "Statt client: der Lauf zu dieser Job-Ausfuehrung (ExecId aus dem Job-Monitor, acmp_job_results).");
+            jl["last"] = Prop("integer", "Wie viele Laeufe, neueste zuerst (1-10, Standard 1).");
+            jl["onlyErrors"] = Prop("boolean", "true = nur Laeufe, die nicht erfolgreich waren.");
+            jl["variables"] = Prop("boolean", "true = auch die protokollierten Variablen (Kennwoerter maskiert). Standard: nur ihre Anzahl.");
+            jl["maxMessages"] = Prop("integer", "Meldungen je Schritt (5-500, Standard 40).");
+            jl["raw"] = Prop("boolean", "true = zusaetzlich das entpackte Protokoll-XML (Meldungen maskiert, gekuerzt auf maxChars).");
+            jl["maxChars"] = Prop("integer", "Nur mit raw: hoechstens so viele Zeichen XML (Standard 40000).");
+            tools.Add(Tool("acmp_job_log",
+                "Schritt-Protokoll eines Client-Command-Laufs aus der ACMP-Datenbank (CLT_SCRIPT_EXECRESULT.XmlLogFile, auf dem Server entpackt): je Lauf Rechner, Command, Version, Zeit, Ergebnis wie in der Console " +
+                "(Erfolgreich, Fehler, Bedingungen nicht erfuellt ...) und je Schritt Zeile, Beschreibung, Klasse, Ergebnis, Dauer und die Meldungen des Agents (Skriptausgabe, ExitCode, gesetzte Variablen). " +
+                "Zeigt, was ein Lauf wirklich getan hat - 'Erfolg' allein beweist das nicht. Kennwoerter (Variablen mit PASS/KENNW/TOKEN..., -Password-Argumente) sind maskiert. " +
+                "Gespeichert wird ein Protokoll nur, wenn der Command es so eingestellt hat (immer bzw. bei Fehler). (read-only DB)",
+                jl, null));
 
             string jw = JOBS.WriterConfigOk ? " Erst mit dryRun=true pruefen und die Vorschau dem Menschen zeigen; ohne dryRun wird direkt geschrieben (keine Vier-Augen-Freigabe), vorher Sicherung in jobs-backups, Zuruecknehmen mit acmp_job_restore."
                                             : " Jobs schreiben ist ausgeschaltet (jobWriter.enabled): nur dryRun moeglich.";
@@ -1445,23 +1585,27 @@ static class AcmpMcp
             js["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
             tools.Add(Tool("acmp_job_set_enabled",
                 "Schaltet Dauerauftraege (Jobs an Containern) ab oder wieder ein, wie die ACMP-Console: Startbedingung 'Disabled' (alle Bedingungen aus) bzw. wieder aktiv, im Job-Monitor nachgezogen. " +
-                "Einschalten eines vom MCP abgeschalteten Jobs stellt die alte Startbedingung exakt wieder her. Nur Dauerauftraege (keine einmaligen Jobs, keine Agentenplaner-Scanner), hoechstens " + AcmpJobs.MaxIds + " je Auftrag, nur per Job-Id." + jw,
+                "Einschalten eines vom MCP abgeschalteten Jobs stellt die alte Startbedingung exakt wieder her. Auch Scanner einer Agentenplaner-Vorlage (JobId aus acmp_agent_tasks; die Standardvorlage 'Default' gilt fuer alle Clients ohne eigene Vorlage). " +
+                "Keine einmaligen Jobs, hoechstens " + AcmpJobs.MaxIds + " je Auftrag, nur per Job-Id." + jw,
                 js, new[] { "enabled" }));
             var jd = new JObject();
             jd["jobIds"] = Prop("array", AcmpJobs.IdsHelp);
             ((JObject)jd["jobIds"])["items"] = new JObject(new JProperty("type", "string"));
             jd["jobId"] = Prop("string", "Statt jobIds: genau ein Job (Job-Id aus acmp_jobs).");
             jd["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts loeschen.");
+            jd["force"] = Prop("boolean", "Nur fuer einmalige Jobs: true = auch loeschen, wenn ein Eintrag in den letzten 2 Stunden 'laeuft' (sonst abgelehnt).");
             jd["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
             tools.Add(Tool("acmp_job_delete",
                 "Loescht Dauerauftraege (Client Command, WUM-Sammlung, Managed Software an einem Container) wie die ACMP-Console: die Verknuepfung in SYS_Templates_Jobs wird geloescht, der ACMP-Trigger loescht den Job und setzt seine Protokolle auf 'fertig'. " +
-                "Job-Historie und Job-Vorlage des Containers bleiben. Hoechstens " + AcmpJobs.MaxIds + " je Auftrag, nur per Job-Id; Berichte, Profile und Jobs ohne genau eine Container-Vorlage nur in der Console." + jw,
+                "Job-Historie und Job-Vorlage des Containers bleiben. Auch einmalige Jobs (Einzelauftraege, z.B. haengende 'wartet auf Zustellung' im Job-Monitor; Client Command, Konfigurationsprofil, WUM, Managed Software): " +
+                "wie 'Loeschen' im Job-Monitor (Eintraege in SYS_Jobs_Logs/_Items/_SubItems), danach Job und leere Einzelauftrags-Vorlage wie die Bereinigung des ACMP-Servers - nicht zugestellte Clients bekommen ihn dann nicht mehr. " +
+                "Hoechstens " + AcmpJobs.MaxIds + " je Auftrag, nur per Job-Id (acmp_jobs includeManual=true); Berichte, Job-Sammlungen und Jobs ohne genau eine Vorlage nur in der Console." + jw,
                 jd, null));
             var jc = new JObject();
             jc["containerId"] = Prop("string", "Container (GUID, steht in acmp_jobs als containerId). Alternativ container oder jobId.");
-            jc["container"] = Prop("string", "Statt containerId: Pfad wie '\\2. Softwareverteilung\\2.1 Installation\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            jc["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Installation\\Beispiel-Software\\' oder eindeutiger Container-Name.");
             jc["jobId"] = Prop("string", "Statt containerId: ein Job des Containers (Job-Id aus acmp_jobs) - gesetzt wird trotzdem fuer alle Jobs des Containers.");
-            jc["condition"] = Prop("string", "Pflicht: once = sobald wie moeglich, einmalig je Client (Console 'Sobald wie moeglich'); startup = einmalig beim Agentenstart; daily = taeglich bzw. alle 'every' Tage; hourly = stuendlich bzw. alle 'every' Stunden; maintenance = in jedem Wartungsfenster.");
+            jc["condition"] = Prop("string", "Pflicht: once = sobald wie moeglich, einmalig je Client (Console 'Sobald wie moeglich'); startup = einmalig beim Agentenstart; always = bei jedem Agentenstart (Console 'Always upon Agent start'); daily = taeglich bzw. alle 'every' Tage; hourly = stuendlich bzw. alle 'every' Stunden; maintenance = in jedem Wartungsfenster.");
             jc["every"] = Prop("integer", "Nur bei daily (1-365) und hourly (1-24): alle n Tage/Stunden. Standard 1.");
             jc["ignoreMaintenanceWindows"] = Prop("boolean", "true = laeuft auch ausserhalb der Wartungsfenster (Console 'ignoriert Wartungszeitfenster'). Standard false. Nicht mit maintenance.");
             jc["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Container, alle Jobs mit Startbedingung vorher/nachher, Laeufe der letzten 7 Tage), nichts schreiben.");
@@ -1473,7 +1617,7 @@ static class AcmpMcp
                 jc, new[] { "condition" }));
             var jx = new JObject();
             jx["containerId"] = Prop("string", "Container (GUID, steht in acmp_jobs als containerId). Alternativ container.");
-            jx["container"] = Prop("string", "Statt containerId: Pfad wie '\\2. Softwareverteilung\\2.1 Installation\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            jx["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Installation\\Beispiel-Software\\' oder eindeutiger Container-Name.");
             jx["onlyOsFamily"] = Prop("boolean", "Pflicht: true = nur Clients der Betriebssystemfamilie des Containers (Windows-Container: keine Linux-Clients), false = alle Clients erlauben.");
             jx["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Familie, Mitglieder, die nicht passen), nichts schreiben.");
             jx["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
@@ -1482,14 +1626,220 @@ static class AcmpMcp
                 "Die Vorschau nennt die Mitglieder, die nicht zur Familie passen (z.B. Linux-Clients in einem Windows-Container); sie fallen bei der naechsten Container-Neuberechnung des ACMP-Servers heraus. " +
                 "Die Betriebssystemfamilie selbst ist nicht aenderbar." + jw,
                 jx, new[] { "onlyOsFamily" }));
-            var jr = new JObject();
-            jr["backup"] = Prop("string", "Name der Sicherung aus dem Ergebnis von acmp_job_set_enabled/_set_condition/_delete bzw. acmp_container_set_restriction, z.B. 20261022-210000-123_disable_AA045CD5.json.");
+            var jf = new JObject();
+            jf["containerId"] = Prop("string", "Container (GUID, steht in acmp_jobs als containerId). Alternativ container oder jobId.");
+            jf["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Updates\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            jf["jobId"] = Prop("string", "Statt containerId: ein Job des Containers (Job-Id aus acmp_jobs).");
+            jf["members"] = Prop("boolean", "true = zusaetzlich die Mitglieder und die Clients, die der Filter jetzt trifft, mit Namen.");
+            jf["sql"] = Prop("boolean", "true = zusaetzlich das gespeicherte SQL (SQLFilter).");
+            jf["fields"] = Prop("string", "Optional: Felder fuer Filter suchen (Teil von Anzeigename oder Tabelle.Feld, z.B. 'Computer' oder 'OSSTRING') - mit Typ und erlaubten Operatoren. Ohne Container nur die Feldsuche.");
+            tools.Add(Tool("acmp_container_filter",
+                "Liest den dynamischen Filter eines Containers (Console 'Dyn. Filter', Standard-Filter): Verknuepfung (UND/ODER/AUSSER), Kriterien lesbar mit Feld, Operator und Wert, Untergruppen, " +
+                "'spec' im Format von acmp_container_set_filter, ob der MCP ihn aendern kann (aenderbar), Mitglieder (ueber den Filter/statisch) und wie viele Clients der Filter jetzt trifft. " +
+                "Mit fields= sucht es Felder fuer neue Kriterien. (read-only DB)",
+                jf, null));
+            var jg = new JObject();
+            jg["containerId"] = Prop("string", "Container (GUID, steht in acmp_jobs als containerId). Alternativ container.");
+            jg["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Updates\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            jg["filter"] = Prop("object", "Der ganze neue Filter (ersetzt den alten): " + AcmpJobs.FilterHelp);
+            jg["excludeComputers"] = Prop("array", "Statt filter: Rechner aus dem jetzigen Filter ausschliessen, z.B. [\"PC-0815\"] (fuegt je Rechner ein Kriterium auf den Computernamen hinzu; bei AUSSER (ODER) und UND, sonst filter angeben).");
+            ((JObject)jg["excludeComputers"])["items"] = new JObject(new JProperty("type", "string"));
+            jg["clear"] = Prop("boolean", "true = Filter entfernen (statt filter). Die Filter-Mitglieder fallen bei der naechsten Neuberechnung heraus.");
+            jg["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (alter/neuer Filter, Clients neu dazu/fallen weg, Dauerauftraege des Containers), nichts schreiben.");
+            jg["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_container_set_filter",
+                "Setzt den dynamischen Filter eines Containers wie die ACMP-Console (Mitschnitt 23.10.2026): SQLFilter in CLT_CONTAINER_STRUCTURE und Definition in SYS_Queries_FilterContainer, eine Transaktion. " +
+                "Das SQL baut der MCP wie die Console (an allen Filtern der DB zeichengleich geprueft); er aendert nur Filter, die er nachbauen kann (Kriterien der obersten Gruppe, hoechstens eine Untergruppe). " +
+                "Die Vorschau fuehrt den neuen Filter lesend aus und nennt die Clients, die neu dazukommen bzw. wegfallen, und die Dauerauftraege des Containers - neue Mitglieder bekommen diese Jobs. " +
+                "Die Mitglieder uebernimmt der ACMP-Server bei der naechsten Container-Neuberechnung bzw. je Client beim Agentenkontakt." + jw,
+                jg, null));            var jr = new JObject();
+            jr["backup"] = Prop("string", "Name der Sicherung aus dem Ergebnis von acmp_job_set_enabled/_set_condition/_delete bzw. acmp_container_set_restriction/_set_filter, z.B. 20261022-210000-123_disable_AA045CD5.json.");
             jr["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen.");
+            jr["force"] = Prop("boolean", "Nur beim Zuruecknehmen eines MSW-Testauftrags: true = auch loeschen, wenn er gerade laeuft.");
             jr["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
             tools.Add(Tool("acmp_job_restore",
-                "Nimmt aus einer Sicherung zurueck: Abschalten/Einschalten oder neue Startbedingung (alte Startbedingung samt Pruefsumme, je Job), Loeschen (Job mit derselben Id wieder angelegt, solange Container und Job-Vorlage bestehen) " +
-                "oder Client-Beschraenkung eines Containers. Nur wenn seitdem nichts geaendert wurde." + jw,
+                "Nimmt aus einer Sicherung zurueck: Abschalten/Einschalten oder neue Startbedingung (alte Startbedingung samt Pruefsumme, je Job), Loeschen (Job mit derselben Id wieder angelegt, solange Container und Job-Vorlage bestehen; " +
+                "Einzelauftraege samt Vorlage und Job-Monitor-Eintraegen), Client-Beschraenkung bzw. Filter eines Containers, angelegten MSW-Dauerauftrag bzw. MSW-Testauftrag (wird geloescht) oder MSW-Abo (abbestellen); " +
+                "Sicherungen der Art 'zustand' (acmp_cc_delete, _cc_delete_folder, _kiosk_delete_group, _unix_script_delete, _maintenance_window_*, _container_security_profile, _agent_template_assign) stellen den Stand der Zeilen davor wieder her. " +
+                "Nur wenn seitdem nichts geaendert wurde." + jw,
                 jr, new[] { "backup" }));
+
+            // ---------- Managed Software (AcmpMsw.cs) ----------
+            var mp = new JObject();
+            mp["name"] = Prop("string", "Optional: Teil des Paket- oder Herstellernamens, z.B. 'Chrome', '.NET', 'Adobe'.");
+            mp["catalog"] = Prop("boolean", "true = auch nicht abonnierte Pakete aus dem Aagon-Katalog (z.B. um ein Paket zum Abonnieren zu finden). Standard: nur abonnierte.");
+            mp["onlyWithoutJob"] = Prop("boolean", "true = nur Pakete ohne Dauerauftrag.");
+            mp["onlyUpdates"] = Prop("boolean", "true = nur Pakete, bei denen Clients ein freigegebenes Update haben.");
+            mp["top"] = Prop("integer", "Optional: hoechstens so viele Pakete (Standard " + AcmpJobs.MswDefaultTop + ", max. " + AcmpJobs.MswMaxTop + ").");
+            tools.Add(Tool("acmp_msw_packages",
+                "Aagon Managed Software: abonnierte Pakete (mit catalog=true der ganze Katalog) je Paket mit Hersteller, Abo, Zustand (aktiv/abgekuendigt), neuester Version, freigegebener Version (Freigabering 255, Testring 1/2 wenn abweichend), " +
+                "Zahl neuerer, noch nicht freigegebener Versionen, Clients mit dem Paket, Clients mit freigegebenem Update (ACMP meldet aktualisierbar) und mit neuerer Version, Dauerauftraege (davon aktiv), Kiosk-Eintraege, offene Einzelauftraege und Hinweise " +
+                "(z.B. 'kein Dauerauftrag, 12 Clients mit freigegebenem Update'). Abonnierte ohne Job mit vielen Updates zuerst. (read-only DB)",
+                mp, null));
+            var mk = new JObject();
+            mk["package"] = Prop("string", "Pflicht: Paket-Id (GUID aus acmp_msw_packages) oder genauer/eindeutiger Name, z.B. 'Google Chrome 64-Bit'.");
+            mk["versions"] = Prop("integer", "Optional: so viele Versionen zeigen (Standard 8, max. 50).");
+            mk["clients"] = Prop("boolean", "false = ohne Computernamen (nur Zahlen). Standard: mit Namen.");
+            tools.Add(Tool("acmp_msw_package",
+                "Ein Managed-Software-Paket im Detail: Versionen mit Verteilungsring (nicht freigegeben/Testring/freigegeben), Download-Stand und Veroeffentlichung; Versionsverteilung in der Flotte (Version -> Clients mit Namen), " +
+                "Clients mit freigegebenem Update, Clients mit neuerer Version; Dauerauftraege (Container, Mitglieder, Startbedingung, Laeufe/Fehler 30 Tage), offene Einzelauftraege, Job-Sammlungen; " +
+                "Parameter des Pakets mit Vorbelegung und Auswahlwerten (fuer acmp_msw_job_create parameters). (read-only DB)",
+                mk, new[] { "package" }));
+            var mc = new JObject();
+            mc["client"] = Prop("string", "Pflicht: Computername oder ClientId.");
+            mc["all"] = Prop("boolean", "true = auch aktuelle Pakete zeigen. Standard: nur Pakete mit Update, neuerer Version oder ohne Freigabe.");
+            tools.Add(Tool("acmp_msw_client",
+                "Managed-Software-Stand eines Clients: je erkanntem Paket installierte und freigegebene Version, Stand (aktuell/Update moeglich/neuer als die Freigabe), Abo und ob ein Dauerauftrag den Client erreicht; " +
+                "MSW-Dauerauftraege an seinen Containern; die letzten 25 MSW-Laeufe (Dauer- und Einzelauftraege) mit Status, Ergebnis und Meldung des Pakets. (read-only DB)",
+                mc, new[] { "client" }));
+
+            string mswParamHelp = "Optional: Parameter des Pakets abweichend von der Vorbelegung, z.B. {\"DesktopShortcut1\": false, \"Language1\": \"Deutsch\"} (Namen und Auswahl: acmp_msw_package).";
+            var mj = new JObject();
+            mj["package"] = Prop("string", "Pflicht: Paket-Id oder genauer Name (abonniert, mit freigegebener Version).");
+            mj["containerId"] = Prop("string", "Container (GUID aus acmp_jobs/acmp_container_members). Alternativ container.");
+            mj["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Updates\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            mj["action"] = Prop("string", "Pflicht: update = nur aktualisieren, wo das Paket installiert ist (Console 'Nur aktualisieren'); install = installieren oder aktualisieren - installiert auch NEU auf Mitgliedern ohne das Paket.");
+            mj["condition"] = Prop("string", "Startbedingung, nur wenn der Container noch keine Dauerauftraege hat (sonst gilt dessen Startbedingung, die Console fuehrt sie je Container): once, startup, always, daily, hourly, maintenance - wie acmp_job_set_condition.");
+            mj["every"] = Prop("integer", "Nur bei daily (1-365) und hourly (1-24): alle n Tage/Stunden. Standard 1.");
+            mj["ignoreMaintenanceWindows"] = Prop("boolean", "true = auch ausserhalb der Wartungsfenster. Standard false. Nicht mit maintenance.");
+            mj["enabled"] = Prop("boolean", "false = mit abgeschalteter Startbedingung anlegen (z.B. zum Vorbereiten). Nur bei einem Container ohne Dauerauftraege. Standard true.");
+            mj["parameters"] = Prop("object", mswParamHelp);
+            mj["log"] = Prop("string", "Optional: Skript-Protokoll speichern onError (Standard laut ACMP-Einstellung), always oder never.");
+            mj["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Version, Startbedingung, Vorlage, Wirkung auf die Mitglieder: aktuell / aeltere Version / ohne Paket), nichts schreiben.");
+            mj["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_msw_job_create",
+                "Legt einen Managed-Software-Dauerauftrag an einem Container an wie die ACMP-Console (Job-Vorlage des Containers, SYS_Jobs mit TManagedSoftwareJobAction, Job-Monitor-Eintrag, Verknuepfungen; eine Transaktion): " +
+                "Aktion installieren/aktualisieren oder nur aktualisieren, Verteilungsring wie die anderen Jobs des Containers (sonst Freigabering), Startbedingung wie acmp_job_set_condition (z.B. maintenance = in jedem Wartungsfenster), " +
+                "Parameter des Pakets wie vorbelegt oder abweichend. Ein Paket nur einmal je Container; nur Windows-Container. Die Vorschau nennt, wie viele Mitglieder aktuell sind, ein Update bekommen oder das Paket NEU bekommen (bei install)." + jw +
+                " Ruecknahme: acmp_job_restore mit der Sicherung (loescht den Job) oder acmp_job_delete.",
+                mj, new[] { "package", "action" }));
+            var cj = new JObject();
+            cj["command"] = Prop("string", "Pflicht: Client Command - Name genau wie in der Console oder ScriptId. Er braucht eine freigegebene Version und darf (noch) keine Parameter haben.");
+            cj["containerId"] = Prop("string", "Container (GUID aus acmp_jobs/acmp_container_members). Alternativ container.");
+            cj["container"] = Prop("string", "Statt containerId: Pfad wie '\\Software\\Installation\\Beispiel-Software\\' oder eindeutiger Container-Name.");
+            cj["condition"] = Prop("string", "Startbedingung, nur wenn der Container noch keine Dauerauftraege hat (sonst gilt dessen Startbedingung): once, startup, always, daily, hourly, maintenance - wie acmp_job_set_condition.");
+            cj["every"] = Prop("integer", "Nur bei daily (1-365) und hourly (1-24): alle n Tage/Stunden. Standard 1.");
+            cj["ignoreMaintenanceWindows"] = Prop("boolean", "true = auch ausserhalb der Wartungsfenster. Standard false. Nicht mit maintenance.");
+            cj["enabled"] = Prop("boolean", "false = mit abgeschalteter Startbedingung anlegen (zum Vorbereiten). Nur bei einem Container ohne Dauerauftraege. Standard true.");
+            cj["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Version, Startbedingung, Vorlage, Mitglieder), nichts schreiben.");
+            cj["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_job_create",
+                "Legt einen Client Command als Dauerauftrag an einem Container an wie die ACMP-Console (Mitschnitt 22.10.2026: Job-Vorlage des Containers, SYS_Jobs mit TCCJobAction, Job-Monitor-Eintrag, Verknuepfungen; eine Transaktion). " +
+                "Der Command laeuft dann auf ALLEN Mitgliedern des Containers nach der Startbedingung - Ziel und Command vorher mit dem Menschen abstimmen. Ein Command nur einmal je Container; nur Windows-Container; " +
+                "Commands mit Parametern bitte in der Console (Speicherformat der Werte noch nicht belegt). Startbedingung wie acmp_job_set_condition, z.B. once (einmalig je Client) oder always (bei jedem Agentenstart)." + jw +
+                " Ruecknahme: acmp_job_restore mit der Sicherung (loescht den Job) oder acmp_job_delete.",
+                cj, new[] { "command" }));
+            var mt = new JObject();
+            mt["package"] = Prop("string", "Pflicht: Paket-Id oder genauer Name (abonniert, mit freigegebener Version).");
+            mt["clients"] = Prop("array", "Pflicht: 1-" + AcmpJobs.MaxTestClients + " Computernamen oder ClientIds, z.B. [\"PC-0815\"].");
+            ((JObject)mt["clients"])["items"] = new JObject(new JProperty("type", "string"));
+            mt["action"] = Prop("string", "Optional: install (Standard, installieren oder aktualisieren), update (nur wenn installiert) oder reinstall (neu installieren).");
+            mt["ignoreMaintenanceWindows"] = Prop("boolean", "Standard true (sofort, wie 'Managed Software zuweisen'); false = erst im Wartungsfenster.");
+            mt["parameters"] = Prop("object", mswParamHelp);
+            mt["log"] = Prop("string", "Optional: Skript-Protokoll onError (Standard laut ACMP-Einstellung), always oder never.");
+            mt["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Clients mit Stand des Pakets, Version, Startbedingung), nichts schreiben.");
+            mt["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_msw_test_install",
+                "Gibt ein Managed-Software-Paket einmalig an 1-" + AcmpJobs.MaxTestClients + " Clients wie 'Managed Software zuweisen' in der Console (Einzelauftrag: Vorlage am Client, Job, Job-Monitor-Eintrag 'wartet auf Zustellung'), " +
+                "freigegebene Version, sobald wie moeglich. Fuer Einzeltests, z.B. auf dem Testrechner. AUF DEN CLIENTS WIRD INSTALLIERT - vorher Ziel und Paket nennen und das OK des Menschen abwarten. " +
+                "Der MCP kann keinen Push ausloesen: der Agent holt den Auftrag bei seiner naechsten Job-Abfrage. Gesperrt fuer ausgemusterte, nicht verwaltete, Nicht-Windows- und geschuetzte Clients und bei offenem Auftrag fuer dasselbe Paket." + jw +
+                " Zurueck, solange er nicht lief: acmp_job_delete mit der Job-Id.",
+                mt, new[] { "package", "clients" }));
+            var ms = new JObject();
+            ms["packages"] = Prop("array", "Pflicht: 1-" + AcmpJobs.MaxSubscribe + " Paket-Ids oder genaue Namen aus acmp_msw_packages catalog=true, z.B. [\"PowerShell 7 64-Bit\"].");
+            ((JObject)ms["packages"])["items"] = new JObject(new JProperty("type", "string"));
+            ms["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+            ms["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_msw_subscribe",
+                "Abonniert Managed-Software-Pakete wie der ACMP-Server beim Abonnieren in der Console (EXEC ap_ManagedSoftware_Subscribe). Herunterladen, Testring und Freigabe erledigt der ACMP-Server beim naechsten MSW-Abgleich " +
+                "(Ring-Konfiguration 'Default': automatisch). Abgekuendigte Pakete werden abgelehnt." + jw + " Ruecknahme (abbestellen): acmp_job_restore mit der Sicherung, solange kein Job und kein Kiosk-Eintrag das Paket nutzt.",
+                ms, null));
+
+            // ---------- Erweiterung 25.10.2026 (AcmpLueckenWrite.cs): Loeschen, Wartungsfenster, Sicherheitsprofile, Agentenplaner ----------
+            string lwz = " Sicherung 'zustand' (alle betroffenen Zeilen vorher/nachher), Zuruecknehmen mit acmp_job_restore backup=<sicherung>, solange niemand die Zeilen inzwischen geaendert hat.";
+            var lcd = new JObject();
+            lcd["command"] = Prop("string", "Pflicht: Name genau wie in der Console oder ScriptId des Client Commands.");
+            lcd["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Versionen, was mit geloescht wird), nichts loeschen.");
+            lcd["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_cc_delete",
+                "LOESCHT einen Client Command mit allen Versionen (Entwurf und freigegeben) wie die ACMP-Console (Mitschnitt 25.10.2026): Parameter, Command, Kiosk-Eintraege; Variablen, Kommentare, Rechte und " +
+                "Datei-Eintraege per ACMP-Kaskade/Trigger. Abgelehnt: Commands mit Dauerauftraegen (erst acmp_job_delete), in Aagon-Standardordnern, in der Console geoeffnet, die CC-Writer-Vorlage (ccWriter.templateScriptId). " +
+                "Vorher mit dem Menschen abstimmen." + jw + lwz, lcd, new[] { "command" }));
+            var lcf = new JObject();
+            lcf["folderId"] = Prop("string", "Pflicht: GUID oder eindeutiger Name des Client-Command-Ordners (acmp_cc_folders).");
+            lcf["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts loeschen.");
+            lcf["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_cc_delete_folder",
+                "LOESCHT einen LEEREN Client-Command-Ordner samt leerer Unterordner wie die ACMP-Console (SYS_SCRIPT_STRUCTURE ueber den ACMP-Trigger, Rechte-Eintraege). Enthaelt er noch Commands (auch Entwuerfe), " +
+                "wird abgelehnt - erst acmp_cc_move oder acmp_cc_delete. Oberster Ordner und Aagon-Standardordner bleiben." + jw + lwz, lcf, new[] { "folderId" }));
+            var lkg = new JObject();
+            lkg["groupId"] = Prop("string", "Pflicht: GUID oder eindeutiger Name (deutsch oder englisch) des Kiosk-Ordners (acmp_kiosk_tree).");
+            lkg["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts loeschen.");
+            lkg["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_kiosk_delete_group",
+                "LOESCHT einen LEEREN Kiosk-Ordner wie die ACMP-Console (SYS_Kiosk_Groups und Filter des Ordners). Mit Eintraegen oder Unterordnern abgelehnt - erst acmp_kiosk_remove_item / acmp_kiosk_update_items." + jw + lwz,
+                lkg, new[] { "groupId" }));
+            var lus = new JObject();
+            lus["script"] = Prop("string", "Pflicht: Name oder Id des Unix Scripts (acmp_unix_scripts).");
+            lus["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts loeschen.");
+            lus["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_unix_script_delete",
+                "LOESCHT ein Unix Script mit allen Versionen wie die ACMP-Console (SYS_UnixClient_Scripts, Versionen per Kaskade). Bisherige Ausgaben bleiben. Unix-Jobs STARTEN kann der MCP weiterhin nicht " +
+                "(der ACMP-Server legt den Job an und stellt ihn sofort zu, Mitschnitt 25.10.2026)." + jw + lwz, lus, new[] { "script" }));
+            string winHelp = "Fenster: days (MO DI MI DO FR SA SO, 'werktags', 'taeglich'; Liste oder Text), start und end als HH:MM (Ende nach Beginn, ueber Mitternacht zwei Fenster).";
+            var lmc = new JObject();
+            lmc["name"] = Prop("string", "Pflicht: Name des Wartungsprofils (eindeutig), z.B. 'Wartungsprofil Testrechner'.");
+            lmc["days"] = Prop("string", "Ein Fenster: Tage, z.B. 'werktags', 'SA' oder 'MO,MI,FR'. Fuer mehrere Fenster stattdessen windows.");
+            lmc["start"] = Prop("string", "Ein Fenster: Beginn HH:MM.");
+            lmc["end"] = Prop("string", "Ein Fenster: Ende HH:MM.");
+            lmc["windows"] = Prop("array", "Statt days/start/end: 1-" + AcmpJobs.MaxWindows + " Fenster als [{\"days\":\"SA\",\"start\":\"20:30\",\"end\":\"23:59\",\"label\":\"Samstag\"}, ...]. " + winHelp);
+            ((JObject)lmc["windows"])["items"] = new JObject(new JProperty("type", "object"));
+            lmc["description"] = Prop("string", "Optional: Beschreibung.");
+            lmc["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts anlegen.");
+            lmc["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_maintenance_window_create",
+                "Legt ein Wartungsprofil (Wartungszeitfenster) an wie die ACMP-Console (Mitschnitt 25.10.2026): TimeFrameDefinition als iCalendar mit je Fenster einem woechentlichen Termin an den gewaehlten Tagen. " +
+                winHelp + " Es gilt erst nach acmp_maintenance_window_assign fuer einen Container. Bestehende Profile lesen: acmp_maintenance_windows." + jw + lwz, lmc, new[] { "name" }));
+            var lma = new JObject();
+            lma["containerId"] = Prop("string", "Container (GUID). Alternativ container.");
+            lma["container"] = Prop("string", "Statt containerId: Pfad wie '\\Windows-Updates\\Clients\\' oder eindeutiger Container-Name.");
+            lma["profile"] = Prop("string", "Wartungsprofil (Name oder Id aus acmp_maintenance_windows). Beim Entfernen optional.");
+            lma["remove"] = Prop("boolean", "true = Wartungsprofil vom Container entfernen.");
+            lma["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Fenster, Mitglieder, Dauerauftraege 'In Wartungsfenstern'), nichts schreiben.");
+            lma["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_maintenance_window_assign",
+                "Ordnet einem Container ein Wartungsprofil zu (ersetzt ein vorhandenes) oder entfernt es (remove=true) wie die ACMP-Console: SYS_Jobs_Maintenance_Profiles_Containers und Container-Kennzeichen. " +
+                "Die Zuordnung je Client rechnet der ACMP-Server bei der naechsten Container-Neuberechnung (bei mehreren Containern gilt der mit der hoechsten Prioritaet). " +
+                "Jobs 'In Wartungsfenstern' laufen dann in diesen Fenstern." + jw + lwz, lma, null));
+            var lmd = new JObject();
+            lmd["profile"] = Prop("string", "Pflicht: Wartungsprofil (Name oder Id).");
+            lmd["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts loeschen.");
+            lmd["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_maintenance_window_delete",
+                "LOESCHT ein Wartungsprofil wie die ACMP-Console - nur wenn es keinem Container mehr zugeordnet ist (sonst erst acmp_maintenance_window_assign remove=true)." + jw + lwz, lmd, new[] { "profile" }));
+            var lsp = new JObject();
+            lsp["containerId"] = Prop("string", "Container (GUID). Alternativ container.");
+            lsp["container"] = Prop("string", "Statt containerId: Pfad oder eindeutiger Container-Name.");
+            lsp["kind"] = Prop("string", "Pflicht: bitlocker oder defender.");
+            lsp["profile"] = Prop("string", "BitLocker- bzw. Defender-Konfigurationsprofil (Name oder Id). Beim Entfernen optional.");
+            lsp["remove"] = Prop("boolean", "true = Profil vom Container entfernen.");
+            lsp["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben.");
+            lsp["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_container_security_profile",
+                "Weist einem Container ein BitLocker- oder Defender-Konfigurationsprofil zu bzw. entfernt es wie die ACMP-Console (Mitschnitt 25.10.2026): Verknuepfung, Vorlage 'Configuration Profile Template', " +
+                "Zuweisungs-Job (nach dem Laden der Job-Liste), Job-Monitor-Eintrag, Container-Kennzeichen. Die Agents setzen das Profil auf ALLEN Mitgliedern um (BitLocker: Verschluesselung) - " +
+                "Ziel und Profil vorher mit dem Menschen abstimmen. Ein Profil je Art und Container; zum Wechseln erst remove=true." + jw + lwz, lsp, new[] { "kind" }));
+            var lat = new JObject();
+            lat["containerId"] = Prop("string", "Container (GUID). Alternativ container.");
+            lat["container"] = Prop("string", "Statt containerId: Pfad oder eindeutiger Container-Name.");
+            lat["template"] = Prop("string", "Agentenplaner-Vorlage (Name oder VorlageId aus acmp_agent_tasks, z.B. 'Server'). Beim Entfernen optional.");
+            lat["remove"] = Prop("boolean", "true = Vorlage vom Container entfernen (dann gilt die eines anderen Containers bzw. die Standardvorlage).");
+            lat["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Scanner der Vorlage), nichts schreiben.");
+            lat["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_agent_template_assign",
+                "Ordnet einem Container eine Agentenplaner-Vorlage zu (ersetzt die bisherige) bzw. entfernt sie wie die ACMP-Console (SYS_Containers_Templates, eine Vorlage je Container). " +
+                "Ein Client bekommt die Vorlage seines Containers mit der hoechsten Prioritaet, sonst die Standardvorlage. Scanner einer Vorlage an/aus: acmp_job_set_enabled mit der JobId aus acmp_agent_tasks." + jw + lwz,
+                lat, null));
         }
 
         if (DB != null && DB.Enabled && WUM != null)
@@ -1524,6 +1874,49 @@ static class AcmpMcp
             tools.Add(Tool("acmp_wum_restore",
                 "Hebt die Ablehnung von Windows-Updates in ACMP auf: loescht die Zeile in Sys_Wum_DeclinedUpdates und baut die Flags neu auf; das Update wird den Clients wieder angeboten, soweit Collections und Testring es zulassen. Hoechstens " + AcmpWum.MaxIds + " Updates je Auftrag, nur per Update-Id. Erster Einsatz mit einem harmlosen, vom Bereinigungsjob abgelehnten Update und Kontrolle in der Console (das Aufheben ist noch nicht gegen die Console belegt)." + wGate,
                 wr, null));
+        }
+
+        if (DB != null && DB.Enabled && RINGS != null)
+        {
+            string rGate = RINGS.ConfigOk ? " Erst dryRun=true; ohne dryRun wird sofort geschrieben (Plan mit dem Stand der Ring-Zeile; hat sie sich bis zum Schreiben geaendert, wird nichts geschrieben). Vorher Sicherung (wum-backups\\*_ring_*.json)." : " Ringe aendern ist ausgeschaltet: nur dryRun moeglich.";
+            var rl = new JObject();
+            rl["id"] = Prop("string", "Optional: genau ein Update (Update-Id, GUID) mit allen Testrechnern.");
+            rl["search"] = Prop("string", "Optional: Teil des Update-Namens oder KB-Nummer.");
+            rl["status"] = Prop("string", "Optional: nur Updates mit diesem Stand: fehler, ungetestet, gestoppt, im-test, getestet, kein-testrechner, ausgenommen, erledigt (mit released=true auch freigegeben).");
+            rl["released"] = Prop("boolean", "true = auch die in den letzten Tagen freigegebenen Updates (mit Fehlschlaegen nach der Freigabe).");
+            rl["top"] = Prop("integer", "Optional: hoechstens so viele Updates (Standard 50, max. 300).");
+            rl["writerStatus"] = Prop("boolean", "true = zusaetzlich Vorpruefung und Rechte des Schreib-Logins (acmp_wum_ring_hold / _release).");
+            tools.Add(Tool("acmp_wum_rings",
+                "Verteilungsringe der Windows-Updates (Testring 1/2 -> Freigegeben) mit dem Fehler-Stopp: je Update im Testring Ring, seit wann, geplante Weitergabe (Ring-Konfiguration, z.B. Default 7 Tage), " +
+                "Uebergang automatisch/manuell und der Stand auf den Testrechnern (installiert, offen, fehlgeschlagen mit Fehlertext, voruebergehend wie Office offen). Status: fehler/ungetestet = der Waechter haelt an " +
+                "(S1 fester Fehler auf einem Testrechner, S2 kurz vor der Weitergabe noch auf keinem installiert), gestoppt, im-test, getestet, kein-testrechner. Dazu Meldungen (Rechnerdefekt, Fehler nach der Freigabe), " +
+                "Ring-Konfiguration, Test-Jobs mit ihren Rechnern und der Stand des Waechters. Seite im Dashboard: /dashboard/updates. (read-only DB)",
+                rl, null));
+            var rh = new JObject();
+            rh["updateIds"] = Prop("array", AcmpWumRings.IdsHelp);
+            ((JObject)rh["updateIds"])["items"] = new JObject(new JProperty("type", "string"));
+            rh["updateId"] = Prop("string", "Statt updateIds: genau ein Update (Update-Id, GUID).");
+            rh["comment"] = Prop("string", "Pflicht: Warum wird angehalten? (mindestens 8 Zeichen; steht im Protokoll und auf der Seite Updates).");
+            rh["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen (Ring, Stand auf den Testrechnern, Flotte), nichts schreiben. Vor jedem Schreiben empfohlen.");
+            rh["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_wum_ring_hold",
+                "Haelt Windows-Updates in ihrem Testring an (wie 'Automatischen Uebergangsmodus deaktivieren' in der Console: SYS_TestRings.TransitionMode = 0). Sie gehen nicht automatisch an den Freigabering weiter, " +
+                "bis jemand sie weiterlaufen laesst oder freigibt (acmp_wum_ring_release). Hoechstens " + AcmpWumRings.MaxIds + " Updates je Auftrag, nur per Update-Id, Pflicht-Kommentar." + rGate,
+                rh, new[] { "comment" }));
+            var rr = new JObject();
+            rr["updateIds"] = Prop("array", AcmpWumRings.IdsHelp);
+            ((JObject)rr["updateIds"])["items"] = new JObject(new JProperty("type", "string"));
+            rr["updateId"] = Prop("string", "Statt updateIds: genau ein Update (Update-Id, GUID).");
+            rr["mode"] = Prop("string", "Pflicht: resume = Uebergang wieder automatisch (das Update laeuft nach der Ring-Konfiguration weiter; ist die Verweildauer abgelaufen, gibt ACMP es beim naechsten stuendlichen Lauf frei) " +
+                "oder now = SOFORT FREIGEBEN (Notfall-Knopf, wie 'Verteilungsring wechseln' -> Freigegeben: Ring 255, der Freigabering bekommt es beim naechsten Lauf seines WUM-Jobs).");
+            rr["comment"] = Prop("string", "Pflicht: Warum? (mindestens 8 Zeichen; steht im Protokoll und auf der Seite Updates).");
+            rr["force"] = Prop("boolean", "Nur mode=now: auch freigeben, wenn das Update auf einem Testrechner mit festem Fehler scheitert (sonst abgelehnt).");
+            rr["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts schreiben. Vor jedem Schreiben empfohlen.");
+            rr["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_wum_ring_release",
+                "Laesst angehaltene Windows-Updates weiterlaufen (mode=resume, TransitionMode = 1) oder gibt Updates aus dem Testring SOFORT frei (mode=now, Ring 255 und Flags neu - der Notfall-Knopf fuer kritische Luecken, " +
+                "wenn die Testrechner das Update geschafft haben). Der Waechter merkt sich das Weiterlassen: aeltere Fehler halten das Update danach nicht wieder an. Hoechstens " + AcmpWumRings.MaxIds + " Updates je Auftrag, nur per Update-Id, Pflicht-Kommentar." + rGate,
+                rr, new[] { "mode", "comment" }));
         }
 
         if (DB != null && DB.Enabled && UNIX != null)
@@ -1583,6 +1976,37 @@ static class AcmpMcp
                 ug, new[] { "script", "ring" }));
         }
 
+        if (OPEN != null)
+        {
+            var ol = new JObject();
+            ol["status"] = Prop("string", "offen (Standard), erledigt oder alle.");
+            ol["bereich"] = Prop("string", "Optional: nur dieser Bereich (" + AcmpOpenItems.AreasHelp + ").");
+            ol["von"] = Prop("string", "Optional: nur Punkte dieses Bedieners (Kurzname, z.B. mmustermann).");
+            ol["suche"] = Prop("string", "Optional: Text in Titel oder Details.");
+            ol["top"] = Prop("integer", "Optional: hoechstens so viele (Standard 100).");
+            tools.Add(Tool("acmp_open_items",
+                "Gemeinsame Liste 'Offene Punkte' der IT (Folgeaufgaben, Nachpruefungen, Entscheidungen aus Claude-Sitzungen und von Menschen; steht im Dashboard der Webseite): je Punkt id, titel, details, bereich, prio, von, sitzung, seit, faellig, status. " +
+                "Offene zuerst nach Prio und Faelligkeit. Vor dem Anlegen pruefen, ob es den Punkt schon gibt. (liest " + AcmpOpenItems.FileName + " im Server-Ordner)",
+                ol, null));
+            var os = new JObject();
+            os["action"] = Prop("string", "Pflicht: anlegen, aendern, erledigen oder oeffnen (erledigten Punkt wieder oeffnen).");
+            os["id"] = Prop("string", "Bei aendern/erledigen/oeffnen: id aus acmp_open_items.");
+            os["titel"] = Prop("string", "Beim Anlegen Pflicht (3-200 Zeichen): kurz und konkret, z.B. 'Scanner-Job der Server auf taeglich umstellen'.");
+            os["details"] = Prop("string", "Optional (bis 2000 Zeichen): was genau, warum, naechster Schritt. Keine Kennwoerter oder Schluessel. Beim Aendern leer = entfernen.");
+            os["bereich"] = Prop("string", "Optional: " + AcmpOpenItems.AreasHelp + " (Standard Sonstiges).");
+            os["prio"] = Prop("string", "Optional: hoch, normal (Standard) oder niedrig.");
+            os["faellig"] = Prop("string", "Optional: Datum JJJJ-MM-TT.");
+            os["sitzung"] = Prop("string", "Optional: Name der Claude-Sitzung bzw. des Chats, aus dem der Punkt kommt.");
+            os["link"] = Prop("string", "Optional: Verweis, z.B. https://... oder Pfad einer Wiki-Notiz.");
+            os["notiz"] = Prop("string", "Optional bei erledigen: was getan wurde (bis 500 Zeichen).");
+            os["dryRun"] = Prop("boolean", "true = nur pruefen und Vorschau zeigen, nichts speichern.");
+            os["intent"] = Prop("string", "Was/warum (fuers Aktivitaetsprotokoll).");
+            tools.Add(Tool("acmp_open_item_set",
+                "Legt einen offenen Punkt in der gemeinsamen Liste der IT an, aendert ihn, setzt ihn auf erledigt oder oeffnet ihn wieder. 'von' ist automatisch der Bediener dieses API-Keys. " +
+                "Wirkt sofort (Sicherung " + AcmpOpenItems.FileName + ".bak), steht im Aktivitaetsprotokoll, die Notbremse sperrt es. Anlegen, wenn am Ende einer Arbeit etwas offen bleibt, das das Team sehen soll; vorher mit acmp_open_items auf Doppelte pruefen.",
+                os, new[] { "action" }));
+        }
+
         var r = new JObject(); r["tools"] = tools; return r;
     }
 
@@ -1603,6 +2027,7 @@ static class AcmpMcp
         Log(name + " von " + requester + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
         if (name.StartsWith("acmp_kiosk_")) return KIOSK.Execute(name, a, requester);
         if (name == "acmp_wum_decline" || name == "acmp_wum_restore") return WUM.Execute(name, a, requester);   // nur mit Plan aus PlanAndRun
+        if (AcmpWumRings.IsWriteTool(name)) return RINGS.Execute(name, a, requester, false);                     // ebenso
         if (AcmpUnix.IsWriteTool(name)) return UNIX.Execute(name, a, requester);   // ebenso
         if (name == "acmp_cf_create") return CF.Execute(a, requester);              // ebenso
         if (name == "acmp_cc_set_parameters") return CCW.RunSetParameters(a, requester);   // ebenso
@@ -1640,6 +2065,7 @@ static class AcmpMcp
         else if (name == "acmp_cc_new_version") plan = CCW.PlanNewVersion(a, true);
         else if (name == "acmp_cc_set_parameters") { CCW.CheckParamWrite(requester); plan = CCW.PlanSetParameters(a); }
         else if (name == "acmp_wum_decline" || name == "acmp_wum_restore") { WUM.CheckWrite(requester, name == "acmp_wum_restore" ? "restore" : "decline"); plan = WUM.Plan(name, a, requester); }
+        else if (AcmpWumRings.IsWriteTool(name)) { RINGS.CheckWrite(requester, name, false); plan = RINGS.Plan(name, a, requester); }
         else if (AcmpUnix.IsWriteTool(name)) { UNIX.CheckWrite(requester, name); plan = UNIX.Plan(name, a, requester); }
         else if (name == "acmp_cf_create") { CF.CheckWrite(requester); plan = CF.Plan(a, requester); }
         else throw new Exception("Kein Tool mit Plan: " + name);
@@ -1824,8 +2250,9 @@ static class AcmpMcp
     {
         return AcmpCcWriter.IsFolderWriteTool(name) || IsKioskWriteTool(name) || AcmpUnix.IsWriteTool(name) ||
                name == "acmp_cc_release" || name == "acmp_cc_new_version" || name == "acmp_cc_set_parameters" || name == "acmp_lib_install" ||
-               name == "acmp_wum_decline" || name == "acmp_wum_restore" || name == "acmp_cf_create" ||
-               AcmpJobs.IsWriteTool(name);   // JOBS.RunWrite wertet dryRun als Erstes aus und plant dann nur
+               name == "acmp_wum_decline" || name == "acmp_wum_restore" || name == "acmp_cf_create" || name == "acmp_open_item_set" || AcmpWumRings.IsWriteTool(name) ||
+               AcmpJobs.IsWriteTool(name) ||   // JOBS.RunWrite wertet dryRun als Erstes aus und plant dann nur
+               IsLueckenApiTool(name);         // acmp_delete_clients / acmp_cf_set_value / acmp_send_report: dryRun = nur Vorschau (AcmpLueckenApi.cs)
     }
 
     static string WriteTierOf(string name)
@@ -1950,8 +2377,9 @@ static class AcmpMcp
             string utId  = (string)a["id"]; if (string.IsNullOrEmpty(utId)) throw new Exception("id fehlt");
             string utAsn = (string)a["assigneeId"];
             int?   utPr  = a["priority"] != null ? (int?)((int)a["priority"]) : null;
-            if (string.IsNullOrEmpty(utAsn) && !utPr.HasValue)
-                throw new Exception("Mindestens assigneeId oder priority angeben. Status aendern via acmp_close_ticket/acmp_reopen_ticket.");
+            string utCat = (string)a["categoryId"];
+            if (string.IsNullOrEmpty(utAsn) && !utPr.HasValue && string.IsNullOrEmpty(utCat))
+                throw new Exception("Mindestens assigneeId, priority oder categoryId angeben. Status aendern via acmp_close_ticket/acmp_reopen_ticket.");
             Guid utGuid; string utGet;
             string utClean = utId.Replace("{","").Replace("}","").Trim();
             if (Guid.TryParse(utClean, out utGuid))
@@ -1978,6 +2406,14 @@ static class AcmpMcp
             if (utPr.HasValue)
                 utXml = System.Text.RegularExpressions.Regex.Replace(utXml,
                     @"<PriorityId>[^<]*</PriorityId>", "<PriorityId>" + utPr.Value + "</PriorityId>");
+            if (!string.IsNullOrEmpty(utCat))   // Erweiterung 25.10.2026: Kategorie setzen (leere CategoryId wurde oben schon entfernt)
+            {
+                string utCX = "<CategoryId>" + GuidBraces(utCat) + "</CategoryId>";
+                if (System.Text.RegularExpressions.Regex.IsMatch(utXml, @"<CategoryId>[^<]*</CategoryId>"))
+                    utXml = System.Text.RegularExpressions.Regex.Replace(utXml, @"<CategoryId>[^<]*</CategoryId>", utCX);
+                else
+                    utXml = utXml.Replace("</Ticket>", utCX + "</Ticket>");
+            }
             if (!string.IsNullOrEmpty(utAsn))
             {
                 string utAX = "<Assignee xsi:type=\"TAssigneeInfo_V1\"><Id>" + GuidBraces(utAsn) + "</Id></Assignee>";
@@ -2016,11 +2452,27 @@ static class AcmpMcp
             if (a["status"] != null && a["status"].Type == JTokenType.Boolean && (bool)a["status"]) jl["schreiber"] = JOBS.WriterStatus(true);
             return TextOut(jl.ToString(Formatting.Indented));
         }
+        if (name == "acmp_container_filter")
+        {
+            RequireDb();
+            return TextOut(JOBS.ContainerFilter(a).ToString(Formatting.Indented));
+        }
+        if (AcmpJobs.IsMswReadTool(name))   // Managed Software lesen (acmp_msw_packages / _package / _client)
+        {
+            RequireDb();
+            return TextOut(JOBS.MswRead(name, a).ToString(Formatting.Indented));
+        }
         if (AcmpJobs.IsWriteTool(name))   // dryRun = Plan; sonst direkt ausfuehren mit Sicherung (keine Vier-Augen-Freigabe mehr)
         {
             RequireDb();
             Log(name + " von " + requester + (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"] ? " [dryRun]" : "") + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
             return TextOut(JOBS.RunWrite(name, a, requester).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_open_items") return TextOut(OPEN.List(a).ToString(Formatting.Indented));
+        if (name == "acmp_open_item_set")   // dryRun = Vorschau; sonst sofort, Sicherung offene-punkte.json.bak
+        {
+            Log(name + " von " + requester + (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"] ? " [dryRun]" : "") + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
+            return TextOut(OPEN.Set(a, string.IsNullOrEmpty(requester) ? "lokal" : requester, "MCP").ToString(Formatting.Indented));
         }
         // GetClientId sucht nur ueber MachineId UND MacAddress (Agenten-Anmeldung) - der Computername allein geht ueber die DB
         bool gcMid = name == "acmp_get_client_id" && a["machineId"] != null && a["machineId"].ToString().Trim().Length > 0;
@@ -2074,6 +2526,21 @@ static class AcmpMcp
         {
             string cx = (string)a["containerIdsXml"]; if (string.IsNullOrEmpty(cx)) throw new Exception("containerIdsXml fehlt");
             return RunCall("DeleteContainers", 1, cx, a);
+        }
+        if (IsLueckenApiTool(name))   // acmp_delete_clients / acmp_cf_set_value / acmp_send_report (AcmpLueckenApi.cs)
+        {
+            Log(name + " von " + requester + (DryRunArg(a) ? " [dryRun]" : "") + ": " + (a["intent"] != null ? (string)a["intent"] : "(ohne intent)"));
+            return LueckenApi(name, a, requester);
+        }
+        if (name == "acmp_lib_search")   // Vorlagen der CTL suchen (AcmpCtl.cs, nur lesen)
+        {
+            if (CTL == null) throw new Exception("ACMP CTL ist nicht eingerichtet (braucht die DB-Anbindung).");
+            return TextOut(CTL.Search(a).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_job_log")   // Schritt-Protokoll eines Laufs (AcmpLuecken.cs)
+        {
+            RequireDb();
+            return TextOut(JOBS.JobLog(a).ToString(Formatting.Indented));
         }
         if (name == "acmp_create_container")
         {
@@ -2476,6 +2943,25 @@ static class AcmpMcp
             {
                 Log(name + " von " + requester + " [dryRun]");
                 JObject plan = WUM.Plan(name, a, requester);
+                plan["dryRun"] = true;
+                return TextOut(plan.ToString(Formatting.Indented));
+            }
+            return TextOut(PlanAndRun(name, a, requester).ToString(Formatting.Indented));
+        }
+        if (name == "acmp_wum_rings")
+        {
+            RequireDb();
+            JObject rl = RINGS.List(a, WATCH != null ? WATCH.HoldsByWatcher() : null, WATCH != null ? WATCH.Status() : null);
+            if (a["writerStatus"] != null && a["writerStatus"].Type == JTokenType.Boolean && (bool)a["writerStatus"]) rl["schreiber"] = RINGS.Status(true);
+            return TextOut(rl.ToString(Formatting.Indented));
+        }
+        if (AcmpWumRings.IsWriteTool(name))
+        {
+            RequireDb();
+            if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
+            {
+                Log(name + " von " + requester + " [dryRun]");
+                JObject plan = RINGS.Plan(name, a, requester);
                 plan["dryRun"] = true;
                 return TextOut(plan.ToString(Formatting.Indented));
             }

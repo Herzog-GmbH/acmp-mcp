@@ -470,8 +470,10 @@ partial class AcmpCcWriter
         return false;
     }
 
+    // Kennwort-Felder: Name enthaelt pass/kennw/pwd/secret/token/credential/apikey - aber keine Schalter und Auswahlfelder wie
+    // Connect_Using_Different_Credentials_Enabled oder ..._Option (Erweiterung 25.10.2026: die wurden in acmp_cc_decode als *** gezeigt)
     static readonly System.Text.RegularExpressions.Regex SecretField =
-        new System.Text.RegularExpressions.Regex("pass|kennw|pwd|secret|token|credential|apikey", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        new System.Text.RegularExpressions.Regex("^(?!.*(enabled|option|_mode$|_type$)).*(pass|kennw|pwd|secret|token|credential|apikey)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     // Decode-Ansicht: Kennwort-Felder eines Schritts durch *** ersetzen (Feld bleibt sichtbar, Wert nicht).
     static void MaskSecrets(XmlElement step)
@@ -486,6 +488,8 @@ partial class AcmpCcWriter
     {
         if (value == "***" && SecretField.IsMatch(name))
             throw new Exception("Schritt " + cls + ", Feld " + name + ": '***' ist der maskierte Platzhalter aus acmp_cc_decode, kein Kennwort. Feld leer lassen und das Kennwort in der ACMP-Console eintragen.");
+        if (value == "***")   // bis 25.10.2026 hat acmp_cc_decode auch Schalter wie ..._Enabled maskiert - alte Ausgaben nie wortwoertlich speichern
+            throw new Exception("Schritt " + cls + ", Feld " + name + ": '***' ist der Platzhalter aus einer frueheren acmp_cc_decode-Ausgabe (dort wurden bis 25.10.2026 auch Schalter maskiert). Den echten Wert aus einer neuen acmp_cc_decode-Ausgabe eintragen.");
     }
 
     // Feldwert fuer den Katalog: Listen/XML nur zaehlen, Kennwort-Felder maskieren, lange Texte kuerzen.
@@ -743,7 +747,9 @@ partial class AcmpCcWriter
     // aus der Basisversion nehmen, sonst ablehnen wie bisher. Der Wert erscheint nie in Hinweisen oder Vorschau.
     static string SecretOrReject(CcBuildCtx ctx, string sid, string given, string cls, string field, string value, string desc, List<string> notes)
     {
-        if (value != "***" || !SecretField.IsMatch(field)) return value;
+        if (value != "***") return value;
+        if (!SecretField.IsMatch(field))   // alte Decode-Ausgabe mit maskiertem Schalter (bis 25.10.2026) - nicht als Wert speichern
+            throw new Exception("Schritt " + cls + " \"" + desc + "\", Feld " + field + ": '***' ist der Platzhalter aus einer frueheren acmp_cc_decode-Ausgabe (dort wurden bis 25.10.2026 auch Schalter maskiert). Den echten Wert aus einer neuen acmp_cc_decode-Ausgabe eintragen.");
         string g = GuidBraces(given);
         KeyValuePair<string, Dictionary<string, string>> e; string stored;
         if (ctx != null && ctx.Secrets != null && g != null && g == sid && ctx.Secrets.TryGetValue(g, out e) && e.Key == cls &&

@@ -158,16 +158,25 @@ partial class AcmpCcWriter
         return string.Join(",", parts.ToArray());
     }
 
-    // Erwartete States nach der Freigabe: freigegebene Version 7, die bisher freigegebene 8 (0 = keine), alle anderen unveraendert
+    // Erwartete States nach der Freigabe: freigegebene Version 7, die bisher freigegebene 8 (0 = keine), alle anderen unveraendert.
+    // Stehen mehrere aeltere Versionen auf 7 (Altlast aus der Console), werden alle abgeloest (8).
     public static string StatesAfterRelease(string before, int version, int releasedVersion)
     {
         var l = ParseStates(before);
         for (int i = 0; i < l.Count; i++)
         {
             if (l[i].Key == version) l[i] = new KeyValuePair<int, int>(version, 7);
-            else if (releasedVersion > 0 && l[i].Key == releasedVersion) l[i] = new KeyValuePair<int, int>(releasedVersion, 8);
+            else if (releasedVersion > 0 && l[i].Value == 7) l[i] = new KeyValuePair<int, int>(l[i].Key, 8);
         }
         return StatesText(l);
+    }
+
+    // Aeltere Versionen mit State 7 neben version (neueste zuerst); normal genau die bisher freigegebene
+    public static List<int> OlderReleased(string states, int version)
+    {
+        var l = new List<int>();
+        foreach (var kv in ParseStates(states)) if (kv.Key != version && kv.Value == 7) l.Add(kv.Key);
+        return l;
     }
 
     // Ordnerregel fuer fremde Commands (wie acmp_cc_new_version): kein Aagon-Standardordner, innerhalb von versionScopeFolderIds
@@ -226,8 +235,9 @@ partial class AcmpCcWriter
         return false;
     }
 
-    // Folgeversion (v2+): genau eine aeltere Version freigegeben (State 7, wird abgeloest), alle anderen abgeloest (State 8), dieselben
+    // Folgeversion (v2+): eine aeltere Version freigegeben (State 7, wird abgeloest), alle anderen abgeloest (State 8), dieselben
     // Dateien wie die freigegebene Version (die Freigabe einer Folgeversion mit neuen Dateien ist nicht beobachtet).
+    // Mehrere aeltere mit State 7 (Altlast aus der Console): Hinweis; als bisher freigegeben gilt die neueste, abgeloest werden alle.
     static void CheckOlderVersions(JObject s, List<string> blockers, List<string> warnings)
     {
         int version = (int)s["version"];
@@ -241,7 +251,9 @@ partial class AcmpCcWriter
         }
         if (drafts.Count > 0) blockers.Add("weitere Entwuerfe neben v" + version + " (" + string.Join(", ", drafts.ToArray()) + ") - unerwartet, in der ACMP-Console pruefen");
         if (odd.Count > 0) blockers.Add("aeltere Versionen mit unbekanntem State (" + string.Join(", ", odd.ToArray()) + ") - in der ACMP-Console pruefen");
-        if (rel.Count > 1) { blockers.Add("mehrere freigegebene Versionen (v" + string.Join(", v", rel.ConvertAll(x => x.ToString()).ToArray()) + ") - unerwartet, in der ACMP-Console pruefen"); return; }
+        if (rel.Count > 1)
+            warnings.Add("mehrere freigegebene Versionen (v" + string.Join(", v", rel.ConvertAll(x => x.ToString()).ToArray()) + ", Altlast aus der Console) - als bisher freigegeben gilt v" +
+                         rel[0] + ", mit der Freigabe werden alle abgeloest (State 8)");
         if (rel.Count == 0)
         {
             blockers.Add("v" + version + " hat keine freigegebene Vorversion (aeltere Versionen alle abgeloest) - so eine Freigabe ist nicht beobachtet; in der ACMP-Console freigeben");
@@ -612,10 +624,16 @@ partial class AcmpCcWriter
                     int v = (int)it["version"], rv = it["releasedVersion"] != null ? (int)it["releasedVersion"] : 0;
                     if (rv > 0)
                     {
-                        var old = c.CreateCommand(); old.Transaction = tx;
-                        old.CommandText = "UPDATE SYS_SCRIPTS SET State=8 WHERE SCRIPTID=@id AND ScriptVersion=@rv AND State=7";
-                        old.Parameters.AddWithValue("@id", id); old.Parameters.AddWithValue("@rv", rv);
-                        if (old.ExecuteNonQuery() != 1) throw new Exception(label + ": v" + rv + " nicht eindeutig abgeloest - zurueckgerollt, nichts freigegeben.");
+                        // bisher freigegebene Version zuerst, dann weitere aeltere mit State 7 (Altlast), je ein UPDATE
+                        List<int> olds = OlderReleased((string)locked["versionStates"], v);
+                        if (olds.Count == 0 || olds[0] != rv) throw new Exception(label + ": bisher freigegebene Version unklar (v" + rv + ") - zurueckgerollt, nichts freigegeben.");
+                        foreach (int ov in olds)
+                        {
+                            var old = c.CreateCommand(); old.Transaction = tx;
+                            old.CommandText = "UPDATE SYS_SCRIPTS SET State=8 WHERE SCRIPTID=@id AND ScriptVersion=@rv AND State=7";
+                            old.Parameters.AddWithValue("@id", id); old.Parameters.AddWithValue("@rv", ov);
+                            if (old.ExecuteNonQuery() != 1) throw new Exception(label + ": v" + ov + " nicht eindeutig abgeloest - zurueckgerollt, nichts freigegeben.");
+                        }
                     }
                     var up = c.CreateCommand(); up.Transaction = tx;
                     up.CommandText = "UPDATE SYS_SCRIPTS SET State=7, IsFileRepoVersionIncreased=0, FileRepoSize=@kb WHERE SCRIPTID=@id AND ScriptVersion=@v AND State=1";
@@ -648,7 +666,9 @@ partial class AcmpCcWriter
         {
             int rv = it["releasedVersion"] != null ? (int)it["releasedVersion"] : 0;
             if (rv > 0) follow++;
-            names.Add(it["name"] + " " + it["scriptId"] + " v" + it["version"] + (rv > 0 ? " (v" + rv + " abgeloest)" : ""));
+            List<int> olds = rv > 0 && it["versionStates"] != null ? OlderReleased((string)it["versionStates"], (int)it["version"]) : new List<int>();
+            if (rv > 0 && olds.Count == 0) olds.Add(rv);
+            names.Add(it["name"] + " " + it["scriptId"] + " v" + it["version"] + (rv > 0 ? " (v" + string.Join(", v", olds.ConvertAll(x => x.ToString()).ToArray()) + " abgeloest)" : ""));
         }
         _log("acmp_cc_release von " + requester + ": " + items.Count + " Command(s) freigegeben" + (follow > 0 ? " (davon " + follow + " Folgeversion(en), alte Version State 8)" : "") +
              ", Sicherung " + bn + ": " + string.Join("; ", names.ToArray()));

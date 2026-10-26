@@ -41,7 +41,8 @@ class AcmpActivity
     static readonly string[] TargetKeys = new string[] {
         "computerName", "client", "clientId", "clientIds", "container", "containerId", "containerIds", "command", "clientCommandId",
         "scriptId", "scriptIds", "script", "name", "folder", "targetFolder", "folderId", "group", "groupId", "item", "itemId", "items",
-        "updateIds", "updates", "ids", "id", "ticketId", "assetId", "contactId", "jobId", "jobIds", "table", "backup", "undo"
+        "updateIds", "updateId", "updates", "ids", "id", "ticketId", "assetId", "contactId", "jobId", "jobIds", "table", "backup", "undo",
+        "package", "packages", "clients"   // Managed Software (acmp_msw_*, 24.10.2026)
     };
     // Argumente, die zu gross oder zu heikel fuer das Protokoll sind: nur ihre Groesse wird vermerkt
     static readonly string[] BulkKeys = new string[] { "steps", "variables", "content", "template", "fields", "params", "parameters", "image", "data", "filter" };

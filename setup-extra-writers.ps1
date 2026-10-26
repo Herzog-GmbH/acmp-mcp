@@ -1,9 +1,15 @@
 # Weitere Schreib-Tools einrichten (optional, standardmaessig aus). Braucht Admin-Rechte (startet sich bei Bedarf selbst erhoeht neu).
 #   wum   Windows-Updates ablehnen / Ablehnung aufheben (acmp_wum_decline, acmp_wum_restore)          Rechte: grant-wum-writer.sql
+#         Fehler-Stopp: anhalten, weiterlaufen lassen, sofort freigeben (acmp_wum_ring_*)           (+ grant-wum-rings.sql)
 #   unix  Unix Scripts anlegen, neue Version, Verteilungsring (acmp_unix_script_*), ab ACMP 6.10      Rechte: grant-unix-writer.sql
 #   cf    Individuelle Felder anlegen (acmp_cf_create)                                                Rechte: grant-cf-params.sql
-#   jobs  Dauerauftraege schalten/loeschen, Startbedingung, Client-Beschraenkung (acmp_job_*,          Rechte: grant-jobs-writer.sql
+#   jobs  Dauerauftraege schalten/loeschen/anlegen, Startbedingung, Client-Beschraenkung (acmp_job_*,  Rechte: grant-jobs-writer.sql
 #         acmp_container_set_restriction)                                                           (+ grant-jobs-writer2.sql)
+#         Container-Filter (acmp_container_set_filter)                                              (+ grant-container-filter.sql)
+#         Managed Software (acmp_msw_job_create, _test_install, _subscribe)                         (+ grant-msw-writer.sql)
+#         Loeschen, Wartungsfenster, Sicherheitsprofile, Agentenplaner (acmp_cc_delete,             (+ grant-luecken-writer.sql)
+#         acmp_maintenance_window_*, acmp_container_security_profile, acmp_agent_template_assign, ...)
+# Die Rechte in Klammern sind optional: fehlen sie, bleiben nur diese Tools gesperrt.
 # acmp_cc_set_parameters (Parameter eines Client Commands) gehoert zum CC-Writer und braucht nur grant-cf-params.sql Abschnitt 3.
 #
 #   cd C:\ProgramData\AcmpMcp
@@ -38,7 +44,7 @@ $all = [ordered]@{
             Check = "acmp_unix_scripts mit status=true" }
   cf   = @{ Section = "cfWriter";   Name = "Individuelle Felder anlegen (acmp_cf_create)"; Sql = "grant-cf-params.sql"; Backup = "cf-backups";
             Check = "acmp_cf_list mit status=true" }
-  jobs = @{ Section = "jobWriter";  Name = "Jobs schalten, loeschen, Startbedingung setzen (acmp_job_*, acmp_container_set_restriction)"; Sql = "grant-jobs-writer.sql"; Backup = "jobs-backups";
+  jobs = @{ Section = "jobWriter";  Name = "Jobs schalten, loeschen, anlegen, Startbedingung setzen (acmp_job_*, acmp_container_*, acmp_msw_*, ...)"; Sql = "grant-jobs-writer.sql"; Backup = "jobs-backups";
             Check = "acmp_jobs mit status=true" }
 }
 $sel = @(Split-ListArg $Features | ForEach-Object { $_.ToLowerInvariant() })
@@ -133,6 +139,7 @@ try {
     if ($f -eq "wum") {
       if (-not (Test-Perm "dbo.Sys_Wum_DeclinedUpdates" "OBJECT" "DELETE")) { Write-Hint "Ohne DELETE auf Sys_Wum_DeclinedUpdates bleibt acmp_wum_restore gesperrt (grant-wum-writer.sql Abschnitt 3)." }
       if (-not (Test-Perm "dbo.ap_Wum_Rebuild_UpdateFlags" "OBJECT" "EXECUTE")) { Write-Hint "Ohne EXECUTE auf ap_Wum_Rebuild_UpdateFlags setzt ACMP das Flag IsDeclined erst beim naechsten eigenen Lauf." }
+      if (-not (Test-Perm "dbo.SYS_TestRings" "OBJECT" "UPDATE" "TransitionMode")) { Write-Info "acmp_wum_ring_hold/_release und der Update-Waechter (wumWatch) bleiben gesperrt, bis grant-wum-rings.sql gelaufen ist." }
     }
     if ($f -eq "unix") {
       if (Test-Perm "dbo.SYS_TestRings" "OBJECT" "DELETE") { Write-Hint "Der Login darf SYS_TestRings LOESCHEN - das braucht er nicht (dort stehen auch die Ringe der Windows-Updates). Empfohlen: Recht entziehen." }
@@ -144,6 +151,9 @@ try {
       if (-not ((Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "SELECT") -and (Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "DELETE"))) { Write-Hint "Ohne SELECT/DELETE auf SYS_Templates_Jobs bleibt acmp_job_delete gesperrt (grant-jobs-writer.sql)." }
       if (-not ((Test-Perm "dbo.SYS_Jobs" "OBJECT" "INSERT") -and (Test-Perm "dbo.SYS_Templates_Jobs" "OBJECT" "INSERT") -and (Test-Perm "dbo.SYS_Templates" "OBJECT" "SELECT") -and (Test-Perm "dbo.SYS_Jobs_Logs" "OBJECT" "UPDATE" "State"))) { Write-Hint "Ohne INSERT auf SYS_Jobs/SYS_Templates_Jobs, SELECT auf SYS_Templates und UPDATE(State) auf SYS_Jobs_Logs bleibt acmp_job_restore gesperrt (grant-jobs-writer.sql)." }
       if (-not ((Test-Perm "dbo.CLT_CONTAINER_STRUCTURE" "OBJECT" "SELECT") -and (Test-Perm "dbo.CLT_CONTAINER_STRUCTURE" "OBJECT" "UPDATE" "ClientRestriction"))) { Write-Info "acmp_container_set_restriction bleibt gesperrt, bis grant-jobs-writer2.sql gelaufen ist (der Rest des Job-Writers geht ohne)." }
+      if (-not ((Test-Perm "dbo.CLT_CONTAINER_STRUCTURE" "OBJECT" "UPDATE" "SQLFilter") -and (Test-Perm "dbo.SYS_Queries_FilterContainer" "OBJECT" "INSERT"))) { Write-Info "acmp_container_set_filter bleibt gesperrt, bis grant-container-filter.sql gelaufen ist." }
+      if (-not ((Test-Perm "dbo.SYS_Templates" "OBJECT" "INSERT") -and (Test-Perm "dbo.ap_Job_BulkAddJobLogItems" "OBJECT" "EXECUTE") -and (Test-Perm "dbo.ap_ManagedSoftware_Subscribe" "OBJECT" "EXECUTE"))) { Write-Info "acmp_msw_job_create, acmp_msw_test_install, acmp_msw_subscribe und acmp_job_create bleiben gesperrt, bis grant-msw-writer.sql gelaufen ist." }
+      if (-not ((Test-Perm "dbo.SYS_SCRIPTS" "OBJECT" "DELETE") -and (Test-Perm "dbo.SYS_Jobs_Maintenance_Profiles" "OBJECT" "INSERT") -and (Test-Perm "dbo.SYS_ObjectLocks" "OBJECT" "SELECT"))) { Write-Info "Loesch-, Wartungsfenster-, Sicherheitsprofil- und Agentenplaner-Tools bleiben gesperrt, bis grant-luecken-writer.sql gelaufen ist." }
       if (Test-Perm "dbo.SYS_Jobs" "OBJECT" "DELETE") { Write-Hint "Der Login darf SYS_Jobs LOESCHEN - das braucht er nicht (das Tool loescht nur ueber SYS_Templates_Jobs). Empfohlen: Recht entziehen." }
     }
     $ready += $f

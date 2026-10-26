@@ -17,7 +17,7 @@ const http = require("http");
 const https = require("https");
 const readline = require("readline");
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const TIMEOUT_MS = 300000;
 
 // Ein leeres oder nie gesetztes Feld kommt je nach Client als "" oder als unersetzter

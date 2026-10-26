@@ -218,6 +218,11 @@ partial class AcmpCcWriter
         if (!SameStr(top.LastModifier, p["baseLastModifier"], false)) d.Add("zuletzt geaendert von " + top.LastModifier);
         CcVersionRow rel = rows.Find(x => x.State == 7);
         if ((rel != null ? rel.Version : 0) != (int)p["releasedVersion"]) d.Add("freigegebene Version jetzt " + (rel != null ? "v" + rel.Version : "keine"));
+        if (p["releasedCount"] != null)
+        {
+            int nrc = rows.FindAll(x => x.State == 7).Count;
+            if (nrc != (int)p["releasedCount"]) d.Add("jetzt " + nrc + " freigegebene Versionen statt " + p["releasedCount"]);
+        }
         return d;
     }
 
@@ -439,6 +444,10 @@ partial class AcmpCcWriter
             p["baseClientSha256"] = Sha256Hex(top.Client); p["baseConsoleSha256"] = Sha256Hex(top.Console);
             p["baseLastModifier"] = top.LastModifier;
             p["releasedVersion"] = released != null ? released.Version : 0;
+            // Mehrere Versionen mit State 7 (Altlast aus der Console, z.B. v1 und v2): als freigegeben gilt
+            // die neueste davon; ihre Zahl bleibt beim Anlegen gleich und wird nach dem Schreiben so geprueft
+            List<CcVersionRow> relAll = rows.FindAll(x => x.State == 7);
+            p["releasedCount"] = relAll.Count;
             p["newVersion"] = newVer;
             p["newClientSha256"] = Sha256Hex(cb); p["newConsoleSha256"] = Sha256Hex(ob);
             p["totalSteps"] = CountSteps(client.Roots); p["secretsTaken"] = secrets;
@@ -454,6 +463,10 @@ partial class AcmpCcWriter
             else
                 head.Add("Vorhandenen ENTWURF " + draftInfo + " von " + label + " UEBERSCHREIBEN - vorher Sicherung, zurueck mit acmp_cc_restore_draft.");
             head.Add("Ordner \"" + p["folderPath"] + "\". Auf Clients laeuft weiter " + relText + ", bis v" + newVer + " freigegeben wird (acmp_cc_release oder ACMP-Console).");
+            if (relAll.Count > 1)
+                head.Add("Hinweis: " + relAll.Count + " Versionen stehen auf freigegeben (State 7: " + string.Join(", ", relAll.ConvertAll(x => "v" + x.Version).ToArray()) +
+                         ", Altlast aus der Console). Als freigegeben gilt hier v" + released.Version + ". Beim Anlegen bleiben alle so; acmp_cc_release loest beim Freigeben von v" + newVer +
+                         " alle aelteren freigegebenen Versionen ab (State 8).");
             head.Add("Uebernommen aus v" + top.Version + ": Name, Ordner, Rechte, Bedingungen, Kennwort-Hash des Commands, angehaengte Dateien (FileRepoVersion " + top.FileRepoVersion + ", " + files + " Datei(en)), Aenderungsprotokoll" +
                      (varsFromBase ? ", Variablen" : "") + (longDesc == null ? ", Beschreibung" : "") + ".");
             if (longDesc != null) head.Add("Neue Beschreibung: " + OneLine(longDesc, 300));
@@ -585,13 +598,15 @@ partial class AcmpCcWriter
                 del.ExecuteNonQuery();
                 InsertVars(c, tx, id, newVer, client.Vars);
 
-                // Kontrolle in derselben Transaktion: Anzahl Versionen, genau ein Entwurf = die geschriebene Version, freigegebene Version unberuehrt
+                // Kontrolle in derselben Transaktion: Anzahl Versionen, genau ein Entwurf = die geschriebene Version, freigegebene Versionen unberuehrt
+                // (so viele mit State 7 wie bei der Planung; Plaene ohne releasedCount: hoechstens eine)
                 var chk = c.CreateCommand(); chk.Transaction = tx;
                 chk.CommandText = "SELECT COUNT(*), MAX(ScriptVersion), SUM(CASE WHEN CAST(State AS int)=1 THEN 1 ELSE 0 END), " +
                     "SUM(CASE WHEN CAST(State AS int)=1 AND ScriptVersion=@nv THEN 1 ELSE 0 END), SUM(CASE WHEN CAST(State AS int)=7 THEN 1 ELSE 0 END), " +
                     "(SELECT COUNT(*) FROM SYS_SCRIPTS_VARIABLES WHERE ScriptId=@id AND ScriptVersion=@nv) FROM SYS_SCRIPTS WHERE SCRIPTID=@id";
                 chk.Parameters.AddWithValue("@id", id); chk.Parameters.AddWithValue("@nv", newVer);
-                int expectRows = (int)p["versions"] + (mode == "insert" ? 1 : 0), expectReleased = (int)p["releasedVersion"] > 0 ? 1 : 0;
+                int expectRows = (int)p["versions"] + (mode == "insert" ? 1 : 0),
+                    expectReleased = p["releasedCount"] != null ? (int)p["releasedCount"] : ((int)p["releasedVersion"] > 0 ? 1 : 0);
                 using (var r = chk.ExecuteReader())
                 {
                     r.Read();

@@ -18,7 +18,12 @@
 //    SYS_Jobs (alle Spalten, geaendert Conditions + ConditionCheckSum) und SYS_Jobs_Logs.ConditionText. Die uebrigen Teile der Huelle bleiben.
 //  - Client-Beschraenkung: UPDATE CLT_CONTAINER_STRUCTURE (alle Spalten, geaendert nur ClientRestriction: 1 = nur Clients der
 //    Betriebssystemfamilie des Containers, 0 = alle). Ausgewertet wird sie im ACMP-Server (keine SQL-Prozedur liest die Spalte).
-// Regeln: nur Dauerauftraege (IsManualJob 0, keine Agentenplaner-Scanner), loeschen nur Jobs mit genau einer Container-Vorlage, hoechstens MaxIds
+// Container-Filter (acmp_container_set_filter, Mitschnitt 23.10.2026): siehe AcmpContainerFilter.cs; Sicherung _filter_, Ruecknahme hier ueber acmp_job_restore.
+// Managed Software (acmp_msw_job_create, acmp_msw_test_install, acmp_msw_subscribe) und einmalige Jobs in acmp_job_delete (24.10.2026): siehe AcmpMsw.cs;
+// Sicherungen _mswjob_, _mswtest_, _subscribe_ bzw. _delete_ mit "manual": true, Ruecknahme hier ueber acmp_job_restore (PlanRestoreMsw/ExecRestoreMsw).
+// Erweiterung 25.10.2026 (AcmpLueckenWrite.cs): Loesch-, Wartungsfenster-, Profil- und Agentenplaner-Tools mit Sicherung "zustand"; acmp_job_set_enabled
+// schaltet auch Scanner einer Agentenplaner-Vorlage (AgentJobRefusal), wie die Console ueber Conditions/ConditionCheckSum + ConditionText.
+// Regeln: nur Dauerauftraege (IsManualJob 0; Agentenplaner-Scanner nur schalten), loeschen nur Jobs mit genau einer Container-Vorlage, hoechstens MaxIds
 // je Auftrag. dryRun zeigt den Plan; sonst wird er direkt ausgefuehrt (seit 22.10.2026 ohne Vier-Augen-Freigabe, dafuer Aktivitaetsprotokoll und Notbremse): Sicherung
 // vorher (jobs-backups\), eine Transaktion je Job (Startbedingung: eine fuer alle Jobs des Containers), der Stand aus dem Plan wird in der
 // Transaktion erneut geprueft, Kontrolle danach.
@@ -79,7 +84,8 @@ partial class AcmpJobs
 
     public static bool IsWriteTool(string name)
     {
-        return name == "acmp_job_set_enabled" || name == "acmp_job_delete" || name == "acmp_job_restore" || name == "acmp_job_set_condition" || name == "acmp_container_set_restriction";
+        return name == "acmp_job_set_enabled" || name == "acmp_job_delete" || name == "acmp_job_restore" || name == "acmp_job_set_condition" || name == "acmp_container_set_restriction" ||
+               name == "acmp_container_set_filter" || IsMswWriteTool(name) || IsCcJobTool(name) || IsLwTool(name);
     }
 
     // ================= Hilfen ohne DB (offline getestet in JobsTest.cs) =================
@@ -166,7 +172,11 @@ partial class AcmpJobs
         List<XmlElement> conds = Conditions(doc);
         if (conds.Count == 0) throw new Exception("Der Job hat keine Startbedingung - zum Einschalten in der Console eine Startbedingung anlegen.");
         foreach (XmlElement c in conds) { SetKid(c, "Enabled", "true"); SetKid(c, "Action", "eaEdit"); }
-        SetKid(doc.DocumentElement, "ConditionText", EnglishText(doc));
+        // wie ConditionTextFor bzw. die Console beim Agentenplaner (Mitschnitt 25.10.2026: "Start every day (ignores Maintenance Windows)")
+        string txt = EnglishText(doc);
+        XmlElement ign = doc.DocumentElement["CanIgnoreMaintenanceTimes"];
+        if (txt != "Disabled" && ign != null && ign.InnerText.Trim() == "true") txt += " (ignores Maintenance Windows)";
+        SetKid(doc.DocumentElement, "ConditionText", txt);
         SetKid(doc.DocumentElement, "Action", "eaEdit");
         return doc.OuterXml;
     }
@@ -292,13 +302,13 @@ partial class AcmpJobs
         return val;
     }
 
-    static readonly Regex BackupRx = new Regex(@"^\d{8}-\d{6}-\d{3}_(disable|enable|delete|condition|restriction)_[0-9A-F]{8}\.json$");
+    static readonly Regex BackupRx = new Regex(@"^\d{8}-\d{6}-\d{3}_(disable|enable|delete|condition|restriction|filter|mswjob|mswtest|subscribe|ccjob|zustand)_[0-9A-F]{8}\.json$");
     public static bool IsBackupName(string s) { return s != null && BackupRx.IsMatch(s); }
 
     // ---------- Startbedingung neu setzen (Bausteine wortgleich aus dem Mitschnitt 22.10.2026) ----------
-    // once = "Sobald wie moeglich" (einmalig), startup = einmalig beim Agentenstart, daily/hourly = alle <every> Tage/Stunden,
-    // maintenance = in jedem Wartungsfenster
-    public static readonly string[] ConditionKinds = { "once", "startup", "daily", "hourly", "maintenance" };
+    // once = "Sobald wie moeglich" (einmalig), startup = einmalig beim Agentenstart, always = bei jedem Agentenstart (wie der 7-Zip-Job,
+    // Erweiterung 25.10.2026), daily/hourly = alle <every> Tage/Stunden, maintenance = in jedem Wartungsfenster
+    public static readonly string[] ConditionKinds = { "once", "startup", "always", "daily", "hourly", "maintenance" };
 
     public static string ConditionKind(string s)
     {
@@ -306,7 +316,9 @@ partial class AcmpJobs
         switch (s.Trim().ToLowerInvariant().Replace("ä", "ae").Replace("ö", "oe").Replace("ü", "ue").Replace("-", "").Replace(" ", ""))
         {
             case "once": case "now": case "einmalig": case "sofort": case "sobaldwiemoeglich": case "asap": return "once";
-            case "startup": case "agentstart": case "agentenstart": case "start": return "startup";
+            case "startup": case "agentstart": case "agentenstart": case "start": case "startuponce": case "einmaligbeimagentenstart": return "startup";
+            case "always": case "startupalways": case "alwaysonstart": case "everystart": case "immer": case "immerbeimagentenstart": case "jederagentenstart":
+            case "beijedemagentenstart": case "jederstart": return "always";
             case "daily": case "day": case "taeglich": return "daily";
             case "hourly": case "hour": case "stuendlich": return "hourly";
             case "maintenance": case "maintenancewindow": case "wartungsfenster": case "wartungszeitfenster": return "maintenance";
@@ -345,6 +357,8 @@ partial class AcmpJobs
         {
             case "once": return "<TStartConditionOnNow>" + WakeUpXml + CondCommon(id, "coNow", true) + "</TStartConditionOnNow>";
             case "startup": return "<TStartConditionOnStartUp>" + TimeFrameOffXml + CondCommon(id, "coStartUp", true) + "</TStartConditionOnStartUp>";
+            // wie "startup", nur RunOnce false (DB 25.10.2026: ein Software-Job und ein Agentenplaner-Scanner "Always on/upon Agent start")
+            case "always": return "<TStartConditionOnStartUp>" + TimeFrameOffXml + CondCommon(id, "coStartUp", false) + "</TStartConditionOnStartUp>";
             case "daily":
             case "hourly":
                 return "<TStartConditionOnStartInterval><Interval>" + every + "</Interval><IntervalUnit>" + (kind == "daily" ? "ivDay" : "ivHour") + "</IntervalUnit>" +
@@ -363,6 +377,7 @@ partial class AcmpJobs
         {
             case "once": t = "As soon as possible"; break;
             case "startup": t = "Once upon Agent start"; break;
+            case "always": t = "Always upon Agent start"; break;   // Schreibweise der Console 6.10.4 (Agentenplaner-Scanner); aeltere Jobs: "Always on ACMP Agent start"
             case "daily": t = every == 1 ? "Start every day" : "Start every " + every + " days"; break;
             case "hourly": t = every == 1 ? "Start every hour" : "Start every " + every + " hours"; break;
             case "maintenance": t = "Within Maintenance Windows"; break;
@@ -460,7 +475,9 @@ partial class AcmpJobs
     JObject RunWriterPreflight(string v)
     {
         var checks = new JArray();
-        bool setOk = false, delOk = false, restOk = false, restrOk = false;
+        bool setOk = false, delOk = false, restOk = false, restrOk = false, filterOk = false;
+        var msw = new bool[5];
+        JObject lw = null;
         try
         {
             string mm = null;
@@ -472,7 +489,7 @@ partial class AcmpJobs
             {
                 rc.Open();
                 try { wc.Open(); }
-                catch (Exception ex) { Add(checks, "Schreib-Login", "block", "Anmeldung fehlgeschlagen: " + ex.Message); return WriterResult(checks, false, false, false, false); }
+                catch (Exception ex) { Add(checks, "Schreib-Login", "block", "Anmeldung fehlgeschlagen: " + ex.Message); return WriterResult(checks, false, false, false, false, false); }
                 string a = Scalar(rc, "SELECT @@SERVERNAME + '/' + DB_NAME()"), b = Scalar(wc, "SELECT @@SERVERNAME + '/' + DB_NAME()");
                 bool same = string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
                 Add(checks, "Datenbank", same ? "ok" : "block", a + (same ? " (Lese- und Schreib-Login gleich)" : " / Schreib-Login auf " + b));
@@ -526,19 +543,53 @@ partial class AcmpJobs
                 restrOk = colsOk && selCont && updRestr && cunknown.Count == 0;
                 Add(checks, "Rechte Client-Beschraenkung", selCont && updRestr ? "ok" : "warn", selCont && updRestr ? "SELECT und UPDATE(ClientRestriction) auf CLT_CONTAINER_STRUCTURE vorhanden"
                     : "fehlen - acmp_container_set_restriction gesperrt (grant-jobs-writer2.sql)");
+                // Container-Filter: eigene Pruefung, sperrt nur acmp_container_set_filter (und dessen Ruecknahme)
+                string fcc = Scalar(rc, "SELECT STUFF((SELECT ',' + COLUMN_NAME + ':' + DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CLT_CONTAINER_STRUCTURE' AND COLUMN_NAME IN ('ClientCondition','FilterKind','HasClientCondition','SQLFilter') ORDER BY COLUMN_NAME FOR XML PATH('')), 1, 1, '')");
+                string fct = Scalar(rc, "SELECT STUFF((SELECT ',' + COLUMN_NAME + ':' + DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='SYS_Queries_FilterContainer' ORDER BY COLUMN_NAME FOR XML PATH('')), 1, 1, '')");
+                bool fcolsOk = fcc == "ClientCondition:varbinary,FilterKind:tinyint,HasClientCondition:tinyint,SQLFilter:nvarchar" && fct == "Expression:nvarchar,FilterItems:xml,Id:uniqueidentifier,RootGroup:xml";
+                Add(checks, "Tabellen Container-Filter", fcolsOk ? "ok" : "warn", fcolsOk ? "CLT_CONTAINER_STRUCTURE und SYS_Queries_FilterContainer wie im Mitschnitt"
+                    : "Spalten abweichend (" + (fcc ?? "keine") + " / " + (fct ?? "keine") + ") - acmp_container_set_filter gesperrt");
+                bool selFc = HasPerm(wc, "dbo.SYS_Queries_FilterContainer", "SELECT", null);
+                bool wrFc = HasPerm(wc, "dbo.SYS_Queries_FilterContainer", "INSERT", null) && HasPerm(wc, "dbo.SYS_Queries_FilterContainer", "UPDATE", null) && HasPerm(wc, "dbo.SYS_Queries_FilterContainer", "DELETE", null);
+                bool updFilt = HasPerm(wc, "dbo.CLT_CONTAINER_STRUCTURE", "UPDATE", "SQLFilter") && HasPerm(wc, "dbo.CLT_CONTAINER_STRUCTURE", "UPDATE", "HasClientCondition") && HasPerm(wc, "dbo.CLT_CONTAINER_STRUCTURE", "UPDATE", "ClientCondition");
+                var ftrg = new List<string>();
+                if (selFc)
+                {
+                    var fq = wc.CreateCommand();
+                    fq.CommandText = "SELECT t.name FROM sys.triggers t WHERE t.parent_id = OBJECT_ID('dbo.SYS_Queries_FilterContainer') AND t.is_disabled = 0";
+                    using (var r = fq.ExecuteReader()) while (r.Read()) ftrg.Add(r.GetString(0));
+                    if (ftrg.Count > 0) Add(checks, "Trigger Filter", "warn", "unbekannte Trigger auf SYS_Queries_FilterContainer: " + string.Join(", ", ftrg.ToArray()) + " - acmp_container_set_filter gesperrt, erst pruefen");
+                }
+                filterOk = fcolsOk && selCont && updFilt && selFc && wrFc && ftrg.Count == 0 && cunknown.Count == 0;
+                Add(checks, "Rechte Container-Filter", selCont && updFilt && selFc && wrFc ? "ok" : "warn", selCont && updFilt && selFc && wrFc
+                    ? "UPDATE(SQLFilter, HasClientCondition, ClientCondition) auf CLT_CONTAINER_STRUCTURE, SELECT/INSERT/UPDATE/DELETE auf SYS_Queries_FilterContainer vorhanden"
+                    : "fehlen - acmp_container_set_filter gesperrt (grant-container-filter.sql)");
                 var extra = new List<string>();
                 if (HasPerm(wc, "dbo.SYS_Jobs", "DELETE", null)) extra.Add("DELETE auf SYS_Jobs (das Tool loescht nur ueber SYS_Templates_Jobs)");
                 if (HasPerm(wc, "dbo.SYS_Jobs", "UPDATE", "JobAction")) extra.Add("UPDATE auf SYS_Jobs.JobAction");
-                if (HasPerm(wc, "dbo.CLT_CONTAINER_STRUCTURE", "UPDATE", "SQLFilter")) extra.Add("UPDATE auf CLT_CONTAINER_STRUCTURE.SQLFilter");
+                if (HasPerm(wc, "dbo.CLT_CONTAINER_STRUCTURE", "UPDATE", "Path")) extra.Add("UPDATE auf CLT_CONTAINER_STRUCTURE.Path");
                 if (Scalar(wc, "SELECT CAST(IS_ROLEMEMBER('db_owner') AS varchar(5))") == "1") extra.Add("Mitglied von db_owner");
                 if (extra.Count > 0) Add(checks, "Rechte (zu viele)", "warn", string.Join(", ", extra.ToArray()));
+                // Managed Software und Einzelauftraege (AcmpMsw.cs): eigene Pruefung, sperrt nur die jeweiligen Tools
+                try { MswPreflight(rc, wc, checks, msw); }
+                catch (Exception ex) { Add(checks, "Managed Software", "warn", "Pruefung abgebrochen: " + ex.Message + " - MSW-Schreib-Tools gesperrt"); for (int i = 0; i < msw.Length; i++) msw[i] = false; }
+                // Erweiterung 25.10.2026 (AcmpLueckenWrite.cs): eigene Pruefung je Tool, sperrt nur das jeweilige Tool
+                try { lw = LwPreflight(wc, checks); }
+                catch (Exception ex) { Add(checks, "Loesch-/Profil-Tools", "warn", "Pruefung abgebrochen: " + ex.Message + " - Loesch-, Wartungsfenster-, Profil- und Agentenplaner-Tools gesperrt"); lw = null; }
             }
         }
         catch (Exception ex) { Add(checks, "Pruefung", "block", "Abgebrochen: " + ex.Message); }
-        return WriterResult(checks, setOk, delOk, restOk, restrOk);
+        JObject res = WriterResult(checks, setOk, delOk, restOk, restrOk, filterOk);
+        bool ok = (bool)res["ok"];
+        res["mswJobTool"] = ok && msw[0]; res["mswTestTool"] = ok && msw[1]; res["manualDeleteTool"] = ok && msw[2] && delOk;
+        res["manualRestoreTool"] = ok && msw[3]; res["subscribeTool"] = ok && msw[4];
+        var lwg = new JObject();
+        foreach (string n in LwToolNames) lwg[n] = ok && lw != null && lw[n] != null && (bool)lw[n];
+        res["lw"] = lwg;
+        return res;
     }
 
-    static JObject WriterResult(JArray checks, bool setOk, bool delOk, bool restOk, bool restrOk)
+    static JObject WriterResult(JArray checks, bool setOk, bool delOk, bool restOk, bool restrOk, bool filterOk)
     {
         var blocks = new List<string>(); int warns = 0;
         foreach (JObject c in checks)
@@ -552,7 +603,7 @@ partial class AcmpJobs
         o["checkedLocal"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         o["summary"] = ok ? "bestanden" + (warns > 0 ? " (" + warns + " Hinweis(e))" : "") : "GESPERRT: " + string.Join(" | ", blocks.ToArray());
         o["setEnabledTool"] = ok && setOk; o["deleteTool"] = ok && delOk; o["restoreTool"] = ok && restOk;
-        o["conditionTool"] = ok && setOk; o["restrictionTool"] = ok && restrOk;
+        o["conditionTool"] = ok && setOk; o["restrictionTool"] = ok && restrOk; o["filterTool"] = ok && filterOk;
         o["checks"] = checks;
         return o;
     }
@@ -566,7 +617,10 @@ partial class AcmpJobs
         o["status"] = (bool)pf["ok"] ? "aktiv" : "gesperrt";
         o["allowedRequesters"] = new JArray(new List<string>(_allowedReq).ToArray());
         o["setEnabledTool"] = pf["setEnabledTool"]; o["deleteTool"] = pf["deleteTool"]; o["restoreTool"] = pf["restoreTool"];
-        o["conditionTool"] = pf["conditionTool"]; o["restrictionTool"] = pf["restrictionTool"];
+        o["conditionTool"] = pf["conditionTool"]; o["restrictionTool"] = pf["restrictionTool"]; o["filterTool"] = pf["filterTool"];
+        o["mswJobTool"] = pf["mswJobTool"]; o["mswTestTool"] = pf["mswTestTool"]; o["manualDeleteTool"] = pf["manualDeleteTool"];
+        o["manualRestoreTool"] = pf["manualRestoreTool"]; o["subscribeTool"] = pf["subscribeTool"];
+        o["lueckenTools"] = pf["lw"];
         o["sicherungen"] = _backupDir;
         o["vorpruefung"] = pf;
         return o;
@@ -578,9 +632,21 @@ partial class AcmpJobs
         if (requester == null || !_allowedReq.Contains(requester)) throw new Exception("Bediener '" + requester + "' darf Jobs nicht aendern (jobWriter.allowedRequesters bzw. ccWriter.allowedRequesters).");
         JObject pf = WriterPreflight(false);
         if (pf == null || !(bool)pf["ok"]) throw new Exception("Jobs schreiben gesperrt - Vorpruefung nicht bestanden: " + (pf != null ? (string)pf["summary"] : "keine Pruefung") + ". Nichts geschrieben.");
+        if (IsLwTool(tool))   // Erweiterung 25.10.2026 (AcmpLueckenWrite.cs)
+        {
+            JObject lw = pf["lw"] as JObject;
+            if (lw == null || lw[tool] == null || !(bool)lw[tool])
+                throw new Exception(tool + " gesperrt - Rechte des Schreib-Logins fehlen oder die Vorpruefung sperrt (grant-luecken-writer.sql, Details: acmp_jobs mit status=true). Nichts geschrieben.");
+            return;
+        }
         string key = tool == "acmp_job_delete" ? "deleteTool" : tool == "acmp_job_restore" ? "restoreTool" : tool == "acmp_job_set_condition" ? "conditionTool"
-                   : tool == "acmp_container_set_restriction" ? "restrictionTool" : "setEnabledTool";
-        if (pf[key] == null || !(bool)pf[key]) throw new Exception(tool + " gesperrt - Rechte des Schreib-Logins fehlen (" + (key == "restrictionTool" ? "grant-jobs-writer2.sql" : "grant-jobs-writer.sql") +
+                   : tool == "acmp_container_set_restriction" ? "restrictionTool" : tool == "acmp_container_set_filter" ? "filterTool"
+                   : (tool == "acmp_msw_job_create" || tool == "acmp_job_create") ? "mswJobTool" : tool == "acmp_msw_test_install" ? "mswTestTool" : tool == "acmp_msw_subscribe" ? "subscribeTool"
+                   : tool == "#manualDelete" ? "manualDeleteTool" : tool == "#manualRestore" ? "manualRestoreTool" : "setEnabledTool";
+        string grant = key == "restrictionTool" ? "grant-jobs-writer2.sql" : key == "filterTool" ? "grant-container-filter.sql"
+                     : (key == "mswJobTool" || key == "mswTestTool" || key == "subscribeTool" || key == "manualDeleteTool" || key == "manualRestoreTool") ? "grant-msw-writer.sql" : "grant-jobs-writer.sql";
+        string label = tool == "#manualDelete" ? "acmp_job_delete fuer einmalige Jobs" : tool == "#manualRestore" ? "acmp_job_restore fuer geloeschte Einzelauftraege" : tool;
+        if (pf[key] == null || !(bool)pf[key]) throw new Exception(label + " gesperrt - Rechte des Schreib-Logins fehlen oder die Vorpruefung sperrt (" + grant +
             ", Details: acmp_jobs mit status=true). Nichts geschrieben.");
     }
 
@@ -645,6 +711,7 @@ partial class AcmpJobs
 
     static string TargetText(JObject j)
     {
+        if (!IsNullTok(j["agentTemplate"])) return (string)j["agentTemplate"];   // Agentenplaner-Scanner (AcmpLueckenWrite.cs)
         return IsNullTok(j["containerId"]) ? "kein Container" : (IsNullTok(j["path"]) ? j["containerId"] + " (Container fehlt)" : (string)j["path"] + " (" + j["members"] + " Mitglieder)");
     }
 
@@ -664,6 +731,11 @@ partial class AcmpJobs
         if (string.IsNullOrEmpty(_backupDir) || !Directory.Exists(_backupDir)) return s;
         foreach (string f in Directory.GetFiles(_backupDir, "*.json"))
         {
+            // nur Sicherungen mit after.checksum lesen (Loesch-Sicherungen von Einzelauftraegen sind gross)
+            string fn = Path.GetFileName(f);
+            if (fn.IndexOf("_disable_", StringComparison.Ordinal) < 0 && fn.IndexOf("_enable_", StringComparison.Ordinal) < 0 &&
+                fn.IndexOf("_condition_", StringComparison.Ordinal) < 0 && fn.IndexOf("_mswjob_", StringComparison.Ordinal) < 0 &&
+                fn.IndexOf("_ccjob_", StringComparison.Ordinal) < 0) continue;
             try
             {
                 JObject b = JObject.Parse(File.ReadAllText(f));
@@ -716,6 +788,12 @@ partial class AcmpJobs
         if (tool == "acmp_job_restore") return PlanRestore(a);
         if (tool == "acmp_job_set_condition") return PlanCondition(a);
         if (tool == "acmp_container_set_restriction") return PlanRestriction(a);
+        if (tool == "acmp_container_set_filter") return PlanFilter(a);
+        if (tool == "acmp_msw_job_create") return PlanMswJob(a);
+        if (tool == "acmp_job_create") return PlanCcJob(a);   // AcmpLuecken.cs
+        if (tool == "acmp_msw_test_install") return PlanMswTest(a);
+        if (tool == "acmp_msw_subscribe") return PlanSubscribe(a);
+        if (IsLwTool(tool)) return PlanLw(tool, a);   // AcmpLueckenWrite.cs
         throw new Exception("Unbekanntes Job-Tool: " + tool);
     }
 
@@ -740,7 +818,7 @@ partial class AcmpJobs
     {
         bool hasId = IsStr(a["containerId"]), hasName = IsStr(a["container"]), hasJob = allowJob && IsStr(a["jobId"]);
         if ((hasId ? 1 : 0) + (hasName ? 1 : 0) + (hasJob ? 1 : 0) != 1)
-            throw new Exception("Genau eines angeben: containerId (GUID aus acmp_jobs), container (Pfad wie '\\2. Softwareverteilung\\2.1 Installation\\Beispiel-Software\\' oder eindeutiger Name)" + (allowJob ? " oder jobId" : "") + ".");
+            throw new Exception("Genau eines angeben: containerId (GUID aus acmp_jobs), container (Pfad wie '\\Software\\Installation\\Beispiel-Software\\' oder eindeutiger Name)" + (allowJob ? " oder jobId" : "") + ".");
         if (hasId)
         {
             string g = GuidBraces((string)a["containerId"]);
@@ -789,7 +867,7 @@ partial class AcmpJobs
     JObject PlanCondition(JObject a)
     {
         string kind = ConditionKind(IsStr(a["condition"]) ? (string)a["condition"] : null);
-        if (kind == null) throw new Exception("condition fehlt oder ist unbekannt. Erlaubt: once (sofort, einmalig je Client), startup (einmalig beim Agentenstart), daily, hourly (mit every = alle n Tage/Stunden), maintenance (in jedem Wartungsfenster).");
+        if (kind == null) throw new Exception("condition fehlt oder ist unbekannt. Erlaubt: once (sofort, einmalig je Client), startup (einmalig beim Agentenstart), always (bei jedem Agentenstart), daily, hourly (mit every = alle n Tage/Stunden), maintenance (in jedem Wartungsfenster).");
         int every = IntArg(a, "every", 1);
         bool ignore = BoolArg(a, "ignoreMaintenanceWindows", false);
         CheckCondition(kind, every, ignore);
@@ -903,7 +981,8 @@ partial class AcmpJobs
             {
                 JObject j = LookupJob(c, id);
                 if (j == null) throw new Exception("Job " + id + " gibt es nicht (SYS_Jobs) - nichts geplant.");
-                string why = RefuseSet((int)j["kind"], (bool)j["manual"]);
+                // Agentenplaner-Scanner einer Vorlage: schalten wie die Console (Mitschnitt 25.10.2026, gleiche Tabellen wie bei Dauerauftraegen)
+                string why = (int)j["kind"] == AgentKind && !(bool)j["manual"] ? AgentJobRefusal(c, j) : RefuseSet((int)j["kind"], (bool)j["manual"]);
                 if (why != null) throw new Exception(JobLabel(j) + " " + why + ". Nichts geplant.");
                 CondInfo before = ParseConditions((string)j["conditions"]);
                 if (!before.Readable) throw new Exception(JobLabel(j) + ": Startbedingung nicht lesbar - in der Console aendern.");
@@ -968,6 +1047,7 @@ partial class AcmpJobs
             {
                 JObject j = LookupJob(c, id);
                 if (j == null) throw new Exception("Job " + id + " gibt es nicht (SYS_Jobs) - nichts geplant.");
+                if ((bool)j["manual"]) { items.Add(PlanManualDeleteItem(c, j, lines, ++no, BoolArg(a, "force", false))); continue; }   // einmaliger Job: wie 'Loeschen' im Job-Monitor (AcmpMsw.cs)
                 string why = RefuseDelete((int)j["kind"], (bool)j["manual"], (int)j["templateLinks"]);
                 if (why != null) throw new Exception(JobLabel(j) + " " + why + ". Nichts geplant.");
                 var it = new JObject();
@@ -982,9 +1062,14 @@ partial class AcmpJobs
         var plan = new JObject();
         plan["action"] = "delete"; plan["items"] = items;
         var pv = new JArray();
-        pv.Add("Job(s) LOESCHEN: " + items.Count + " Job(s). Geloescht wird die Zeile in SYS_Templates_Jobs, der ACMP-Trigger loescht dann den Job aus SYS_Jobs und setzt seine Protokolle auf 'fertig'. Je eine Transaktion, Sicherung vorher (vollstaendige Zeile).");
+        int nMan = 0; foreach (JObject x in items) if (x["manual"] != null && (bool)x["manual"]) nMan++;
+        if (nMan < items.Count)
+            pv.Add("Dauerauftraege LOESCHEN: " + (items.Count - nMan) + " Job(s). Geloescht wird die Zeile in SYS_Templates_Jobs, der ACMP-Trigger loescht dann den Job aus SYS_Jobs und setzt seine Protokolle auf 'fertig'. Je eine Transaktion, Sicherung vorher (vollstaendige Zeile).");
+        if (nMan > 0)
+            pv.Add("Einmalige Jobs (Einzelauftraege) LOESCHEN: " + nMan + " Job(s), wie 'Loeschen' im Job-Monitor der Console (Eintraege in SYS_Jobs_Logs/_Items/_SubItems je Job), danach Job und leere Einzelauftrags-Vorlage wie die Bereinigung des ACMP-Servers. Je eine Transaktion, Sicherung vorher (Job, Vorlage, Client-Verknuepfungen, Eintraege).");
         foreach (string l in lines) pv.Add(l);
-        pv.Add("Die Job-Historie (Job-Monitor) bleibt. Die Job-Vorlage des Containers bleibt, auch wenn sie leer wird. Zurueck mit acmp_job_restore (legt den Job mit derselben Id wieder an).");
+        if (nMan < items.Count) pv.Add("Bei Dauerauftraegen bleibt die Job-Historie (Job-Monitor) und die Job-Vorlage des Containers, auch wenn sie leer wird.");
+        pv.Add("Zurueck mit acmp_job_restore (legt den Job mit derselben Id wieder an" + (nMan > 0 ? "; bei Einzelauftraegen samt Vorlage und Job-Monitor-Eintraegen - offene Eintraege werden dann wieder zugestellt" : "") + ").");
         plan["vorschau"] = pv;
         return plan;
     }
@@ -997,6 +1082,10 @@ partial class AcmpJobs
         if (!File.Exists(file)) throw new Exception("Sicherung " + name + " gibt es nicht in " + _backupDir + ".");
         JObject b = JObject.Parse(File.ReadAllText(file));
         string kind = (string)b["kind"], id = (string)b["jobId"];
+        if (kind == "filter") { JObject fp = PlanRestoreFilter(b, name); fp["backup"] = name; fp["kind"] = kind; return fp; }
+        if (kind == "zustand") return PlanRestoreState(b, name);   // Erweiterung 25.10.2026 (AcmpLueckenWrite.cs)
+        if (kind == "mswjob" || kind == "ccjob" || kind == "mswtest" || kind == "subscribe" || (kind == "delete" && b["manual"] != null && b["manual"].Type == JTokenType.Boolean && (bool)b["manual"]))
+            return PlanRestoreMsw(b, name, BoolArg(a, "force", false));   // AcmpMsw.cs
         var plan = new JObject(); plan["backup"] = name; plan["jobId"] = id; plan["kind"] = kind;
         var pv = new JArray();
         if (kind == "restriction")
@@ -1058,6 +1147,9 @@ partial class AcmpJobs
     // Einstieg fuer den Server: dryRun -> nur Plan; sonst pruefen, planen, direkt ausfuehren (keine Vier-Augen-Freigabe mehr)
     public JObject RunWrite(string tool, JObject a, string requester)
     {
+        // dryRun nur als echtes true/false: "true" als Text wuerde sonst als Ausfuehren gelesen (Review 25.10.2026)
+        if (a["dryRun"] != null && a["dryRun"].Type != JTokenType.Boolean && a["dryRun"].Type != JTokenType.Null)
+            throw new Exception("dryRun muss true oder false sein (nicht als Text) - nichts ausgefuehrt.");
         if (a["dryRun"] != null && a["dryRun"].Type == JTokenType.Boolean && (bool)a["dryRun"])
         {
             JObject p = PlanWrite(tool, a);
@@ -1069,12 +1161,28 @@ partial class AcmpJobs
         CheckWrite(requester, tool);
         JObject plan = PlanWrite(tool, a);
         if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_restriction") CheckWrite(requester, "acmp_container_set_restriction");
+        if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_filter") CheckWrite(requester, "acmp_container_set_filter");
+        if (tool == "acmp_job_restore" && ((string)plan["action"] == "restore_mswtest" || (string)plan["action"] == "restore_mswjob")) CheckWrite(requester, "#manualDelete");
+        if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_manual") CheckWrite(requester, "#manualRestore");
+        if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_subscribe") CheckWrite(requester, "acmp_msw_subscribe");
+        if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_zustand") CheckWrite(requester, (string)plan["tool"]);
+        if (tool == "acmp_job_delete") foreach (JObject it in (JArray)plan["items"]) if (it["manual"] != null && (bool)it["manual"]) { CheckWrite(requester, "#manualDelete"); break; }
         lock (_jwLock)
         {
+            if (tool == "acmp_msw_job_create") return ExecMswJob(plan, requester);
+            if (tool == "acmp_job_create") return ExecCcJob(plan, requester);
+            if (IsLwTool(tool)) return ExecState(plan, requester);   // AcmpLueckenWrite.cs
+            if (tool == "acmp_job_restore" && (string)plan["action"] == "restore_zustand") return ExecRestoreState(plan, requester);
+            if (tool == "acmp_msw_test_install") return ExecMswTest(plan, requester);
+            if (tool == "acmp_msw_subscribe") return ExecSubscribe(plan, requester);
+            string pa = (string)plan["action"] ?? "";
+            if (tool == "acmp_job_restore" && (pa == "restore_mswjob" || pa == "restore_mswtest" || pa == "restore_subscribe" || pa == "restore_manual"))
+                return ExecRestoreMsw(plan, requester);
             if (tool == "acmp_job_delete") return ExecDelete(plan, requester);
             if (tool == "acmp_job_restore") return ExecRestore(plan, requester);
             if (tool == "acmp_job_set_condition") return ExecCondition(plan, requester);
             if (tool == "acmp_container_set_restriction") return ExecRestriction(plan, requester);
+            if (tool == "acmp_container_set_filter") return ExecFilter(plan, requester);
             return ExecSet(plan, requester);
         }
     }
@@ -1085,6 +1193,9 @@ partial class AcmpJobs
         JArray items = p["items"] as JArray;
         if (items != null) foreach (JObject it in items) { it.Remove("oldXml"); it.Remove("newXml"); }
         p.Remove("currentXml"); p.Remove("newXml");
+        p.Remove("conditionsXml"); p.Remove("jobActionXml");   // MSW: Startbedingung und JobAction (lang; die Vorschau zeigt sie lesbar)
+        p.Remove("before"); p.Remove("after"); p.Remove("current"); p.Remove("target");   // Container-Filter: Stand mit XML
+        p.Remove("ops"); p.Remove("specs"); p.Remove("fp"); p.Remove("verify");          // Loesch-/Profil-Tools: SQL-Bausteine (die Vorschau zeigt sie lesbar)
     }
 
     string SaveBackup(JObject b, string kind, string jobId)
@@ -1251,6 +1362,9 @@ partial class AcmpJobs
             rc.Open(); wc.Open();
             foreach (JObject it in (JArray)plan["items"])
             {
+              try
+              {
+                if (it["manual"] != null && (bool)it["manual"]) { done.Add(ExecManualDeleteItem(rc, wc, it, requester)); continue; }
                 string id = (string)it["jobId"], label = "Job \"" + it["name"] + "\" " + id;
                 JObject row = FullJobRow(rc, id);
                 if (row == null) throw new Exception(label + " gibt es nicht mehr - nichts geloescht.");
@@ -1282,11 +1396,23 @@ partial class AcmpJobs
                 var o = new JObject(); o["jobId"] = id; o["name"] = it["name"]; o["ziel"] = it["target"]; o["sicherung"] = Path.GetFileName(bf);
                 done.Add(o);
                 _log("acmp_job_delete von " + requester + ": " + label + " an " + it["target"] + ", Sicherung " + Path.GetFileName(bf));
+              }
+              catch (Exception ex)
+              {
+                  // je Job eine eigene Transaktion: die vorherigen sind schon geloescht - das melden statt nur den Fehler
+                  if (done.Count == 0) throw;
+                  var pr = new JObject();
+                  pr["ok"] = false; pr["teilweise"] = true; pr["aktion"] = "teilweise geloescht"; pr["jobs"] = done;
+                  pr["fehler"] = "Job " + it["jobId"] + " (" + it["name"] + "): " + ex.Message + " - dieser und die folgenden Jobs sind NICHT geloescht.";
+                  pr["zurueck"] = "acmp_job_restore mit backup=<sicherung> je geloeschtem Job.";
+                  _log("acmp_job_delete von " + requester + ": teilweise (" + done.Count + " geloescht), Fehler bei " + it["jobId"] + ": " + ex.Message);
+                  return pr;
+              }
             }
         }
         var res = new JObject();
         res["ok"] = true; res["aktion"] = "geloescht"; res["jobs"] = done;
-        res["zurueck"] = "acmp_job_restore mit backup=<sicherung> legt den Job mit derselben Id wieder an (solange Container und Job-Vorlage bestehen).";
+        res["zurueck"] = "acmp_job_restore mit backup=<sicherung> legt den Job mit derselben Id wieder an (Dauerauftraege: solange Container und Job-Vorlage bestehen; Einzelauftraege: samt Vorlage und Eintraegen).";
         return res;
     }
 
@@ -1301,6 +1427,11 @@ partial class AcmpJobs
             {
                 label = "Container " + plan["path"];
                 using (SqlTransaction tx = wc.BeginTransaction()) { SwapRestriction(wc, tx, (string)plan["containerId"], (int)plan["oldValue"], (int)plan["newValue"], label); tx.Commit(); }
+            }
+            else if (action == "restore_filter")
+            {
+                label = "Container " + plan["path"];
+                using (SqlTransaction tx = wc.BeginTransaction()) { SwapFilter(wc, tx, (string)plan["containerId"], (JObject)plan["current"], (JObject)plan["target"], label); tx.Commit(); }
             }
             else if (action == "restore_set")
             {
@@ -1357,8 +1488,9 @@ partial class AcmpJobs
         }
         _log("acmp_job_restore von " + requester + ": " + label + " aus " + plan["backup"]);
         var res = new JObject();
-        res["ok"] = true; res["aktion"] = action == "restore_delete" ? "wieder angelegt" : action == "restore_restriction" ? "Client-Beschraenkung zurueckgesetzt" : "Startbedingung zurueckgesetzt";
-        if (action == "restore_restriction") res["container"] = plan["path"]; else res["jobId"] = id;
+        res["ok"] = true; res["aktion"] = action == "restore_delete" ? "wieder angelegt" : action == "restore_restriction" ? "Client-Beschraenkung zurueckgesetzt"
+                                       : action == "restore_filter" ? "Container-Filter zurueckgesetzt" : "Startbedingung zurueckgesetzt";
+        if (action == "restore_restriction" || action == "restore_filter") res["container"] = plan["path"]; else res["jobId"] = id;
         res["sicherung"] = plan["backup"];
         return res;
     }

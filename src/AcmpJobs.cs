@@ -392,8 +392,9 @@ partial class AcmpJobs   // Schreiben (abschalten, loeschen, zuruecknehmen): Acm
         {
             double rate = j.Err30 / (double)j.Runs30;
             string pct = (rate * 100).ToString("0.#", CultureInfo.GetCultureInfo("de-DE")) + " %";
-            if (j.Err30 >= 3 && rate >= 0.2) h.Add("gelb: viele Fehler - " + Num(j.Err30) + " von " + Num(j.Runs30) + " Laeufen in 30 Tagen (" + pct + ").");
-            else h.Add("info: " + Num(j.Err30) + " Fehler in 30 Tagen (" + pct + " der Laeufe).");
+            string wumNote = j.Kind == 58 ? " Bei WUM-Jobs zaehlt ein Lauf als Fehler, wenn mindestens ein Update darin scheiterte - auch voruebergehend (Office offen, Neustart); Einzelheiten: acmp_wum_rings bzw. acmp_failed_updates." : "";
+            if (j.Err30 >= 3 && rate >= 0.2) h.Add("gelb: viele Fehler - " + Num(j.Err30) + " von " + Num(j.Runs30) + " Laeufen in 30 Tagen (" + pct + ")." + wumNote);
+            else h.Add("info: " + Num(j.Err30) + " Fehler in 30 Tagen (" + pct + " der Laeufe)." + wumNote);
         }
         if (j.Waiting > 0 && j.OldestWaiting > 0 && now - j.OldestWaiting > 30)
             h.Add("info: " + Num(j.Waiting) + " Client(s) warten, der aelteste seit " + OleText(j.OldestWaiting) + " (Client lange offline oder Job haengt).");
@@ -539,19 +540,24 @@ partial class AcmpJobs   // Schreiben (abschalten, loeschen, zuruecknehmen): Acm
                 else if (j.ContainerId == null && hasTpl) j.TemplateMismatch = true;
             }
 
-            // 3) Laeufe je Job (7 und 30 Tage, letzter Lauf, wartende Clients)
+            // 3) Laeufe je Job (7 und 30 Tage, letzter Lauf, wartende Clients). Fehler: Ergebnis 2/3 oder abgebrochen/Timeout -
+            //    bei WUM-Jobs (JobKind 58) aber nur, wenn ein Update im Lauf wirklich scheiterte (Unterergebnis Result 2) oder der Lauf selbst Ergebnis 2 hat. Deren
+            //    Job-Ergebnis 3/4 heisst "fertig, nichts zu tun" (belegt an mehreren tausend Laeufen, fast alle Unterergebnisse Erfolg).
+            const string Err = "(i.State IN (4, 5) OR (jj.JobKind = 58 AND (sf.ParentExecId IS NOT NULL OR i.Result = 2)) OR (jj.JobKind <> 58 AND i.Result IN (2, 3)))";
             var rq = Cmd(c,
                 "DECLARE @now float = CAST(GETDATE() AS float) + 2; " +
                 "SELECT CAST(i.JobId AS varchar(36)), " +
                 "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 7 THEN 1 ELSE 0 END), " +
-                "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 7 AND (i.Result IN (2, 3) OR i.State IN (4, 5)) THEN 1 ELSE 0 END), " +
+                "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 7 AND " + Err + " THEN 1 ELSE 0 END), " +
                 "COUNT(DISTINCT CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 7 THEN i.ClientId END), " +
                 "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 30 THEN 1 ELSE 0 END), " +
-                "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 30 AND (i.Result IN (2, 3) OR i.State IN (4, 5)) THEN 1 ELSE 0 END), " +
+                "SUM(CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 30 AND " + Err + " THEN 1 ELSE 0 END), " +
                 "COUNT(DISTINCT CASE WHEN i.State BETWEEN 2 AND 5 AND i.LastActivity >= @now - 30 THEN i.ClientId END), " +
                 "MAX(CASE WHEN i.State BETWEEN 2 AND 5 THEN i.LastActivity END), " +
                 "SUM(CASE WHEN i.State < 2 THEN 1 ELSE 0 END), MIN(CASE WHEN i.State < 2 THEN i.LastActivity END) " +
-                "FROM SYS_Jobs_Logs_Items i WHERE i.JobId IN (SELECT j.Id FROM SYS_Jobs j WHERE " + JobFilter + ") GROUP BY i.JobId");
+                "FROM SYS_Jobs_Logs_Items i JOIN SYS_Jobs jj ON jj.Id = i.JobId " +
+                "LEFT JOIN (SELECT DISTINCT s.ParentExecId FROM SYS_Jobs_Logs_SubItems s WHERE s.JobKind = 58 AND s.Result = 2) sf ON sf.ParentExecId = i.ExecId " +
+                "WHERE i.JobId IN (SELECT j.Id FROM SYS_Jobs j WHERE " + JobFilter + ") GROUP BY i.JobId");
             FilterParams(rq, manual, agent);
             using (var r = rq.ExecuteReader())
                 while (r.Read())
@@ -718,7 +724,7 @@ partial class AcmpJobs   // Schreiben (abschalten, loeschen, zuruecknehmen): Acm
         res["gefunden"] = total; res["auffaellig"] = notableCount; res["gezeigt"] = arr.Count;
         if (arr.Count < (notable ? notableCount : total)) res["gekuerzt"] = "top=" + top + " - mit top (max. " + MaxListed + ") oder Filtern mehr zeigen.";
         res["legende"] = "hinweise: 'rot' abstellen/reparieren, 'tot' laeuft nie, 'gelb' aendern/klaeren, 'info' zur Kenntnis. Laeufe aus SYS_Jobs_Logs_Items " +
-                         "(fehler = Ergebnis Warnung/Fehlgeschlagen/Fehler oder abgebrochen). Ein 'Erfolg' heisst bei Commands ohne Exit-Code-Auswertung nur, dass der Befehl startete." +
+                         "(fehler = Ergebnis Warnung/Fehlgeschlagen/Fehler oder abgebrochen; bei WUM-Sammlungen nur Laeufe, in denen ein Update scheiterte). Ein 'Erfolg' heisst bei Commands ohne Exit-Code-Auswertung nur, dass der Befehl startete." +
                          (client != null ? " aufDiesemClient = letzter Eintrag im Job-Monitor fuer diesen Client; alle Laeufe (auch einmalige Jobs): acmp_job_results." : "");
         res["jobs"] = arr;
         if (client == null && nameF == null && contF == null) res["vorlagenOhneJob"] = templates;

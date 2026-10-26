@@ -1,6 +1,6 @@
 // AcmpWeb: Weboberflaeche des ACMP-MCP-Servers (gleicher Port wie der MCP, eigener Login, NICHT der MCP-Bearer-Key).
-// Seiten: Uebersicht (/dashboard), Aktivitaet (/activity), Einstellungen mit Notbremse (/settings), Onboarding (/onboarding),
-// Patchverlauf (/changelog), Ersteinrichtung (/setup). Seit 22.10.2026 ohne Vier-Augen-Freigabe: Schreibaktionen wirken sofort,
+// Seiten: Dashboard mit Lagebild (/dashboard, AcmpWebDashboard.cs), Rollouts (/dashboard/rollout, AcmpWebRollout.cs), Aktivitaet (/activity),
+// Einstellungen mit Notbremse (/settings), Onboarding (/onboarding), Patchverlauf (/changelog), Ersteinrichtung (/setup). Seit 22.10.2026 ohne Vier-Augen-Freigabe: Schreibaktionen wirken sofort,
 // stehen im Aktivitaetsprotokoll (AcmpActivity) und lassen sich mit der Notbremse sperren. Alte Freigabe-Links melden nicht mehr an.
 // Anmeldung: Kurzname + Web-Token (web.users; Configs von vor dem 22.10.2026: approval.approvers) -> Sitzungs-Cookie
 // (HttpOnly, SameSite=Strict, 12 Stunden, nur im Speicher - nach einem Neustart neu anmelden). Formulare mit Wirkung
@@ -24,7 +24,7 @@ class WebResult
     public List<string> Headers = new List<string>();
 }
 
-class AcmpWeb
+partial class AcmpWeb   // Startseite (Lagebild) und offene Punkte: AcmpWebDashboard.cs
 {
     public string CfgPath;
     public Func<JArray> GetAllTools;
@@ -50,6 +50,8 @@ class AcmpWeb
     static readonly string[] Paths = {
         "/dashboard", "/activity", "/settings", "/notbremse", "/onboarding", "/onboarding-create", "/changelog",
         "/login", "/logout", "/setup", "/setup-create",
+        "/dashboard-refresh", "/punkt-neu", "/punkt-erledigt", "/punkt-oeffnen", RolloutPath,
+        UpdatesPath, "/wum-ring", "/wum-pruefen", "/wum-testmail",
         "/approvals", "/approval", "/approve", "/reject", "/history", "/settings-toggle", "/settings-bypass", "/settings-approval" };
 
     static readonly Regex OnbIdRe = new Regex("^[A-Za-z0-9_.-]{2,32}$");
@@ -97,7 +99,7 @@ class AcmpWeb
         catch (Exception ex)
         {
             _log("Webseite: Fehler bei " + PathOnly(pathQuery) + ": " + ex.Message);
-            res.Code = 500; res.Body = Page("<h1>Fehler</h1><p>" + Esc(ex.Message) + "</p><p><a href=\"/dashboard\">Zur Übersicht</a></p>");
+            res.Code = 500; res.Body = Page("<h1>Fehler</h1><p>" + Esc(ex.Message) + "</p><p><a href=\"/dashboard\">Zum Dashboard</a></p>");
         }
         return res;
     }
@@ -140,7 +142,7 @@ class AcmpWeb
 
         if (path == "/logout") { EndSession(hdr, res); Redirect(res, "/login"); return; }
         WebSession s = CurrentSession(hdr);
-        if (s == null) { Redirect(res, "/login?next=" + Uri.EscapeDataString(NewPath(path))); return; }
+        if (s == null) { Redirect(res, "/login?next=" + Uri.EscapeDataString(NewPath(path) + KeepQuery(path, pathQuery))); return; }
         if (path != NewPath(path)) { Redirect(res, NewPath(path)); return; }
         if (method == "POST" && !FixedEquals(Get(f, "csrf"), s.Csrf))
         {
@@ -149,6 +151,10 @@ class AcmpWeb
             return;
         }
 
+        if (RouteDashboard(path, method, f, s, res)) return;
+        if (RouteWum(path, method, f, s, res)) return;
+        if (path == UpdatesPath) { res.Body = UpdatesPage(s, q); return; }
+        if (path == RolloutPath) { res.Body = RolloutPage(s, q); return; }
         if (path == "/activity") { res.Body = ActivityPage(s, q); return; }
         if (path == "/settings") { res.Body = SettingsPage(s, null); return; }
         if (path == "/notbremse")
@@ -163,7 +169,7 @@ class AcmpWeb
             res.Body = OnboardingCreate(s, f); return;
         }
         if (path == "/changelog") { res.Body = ChangelogPage(s); return; }
-        res.Body = DashboardPage(s);
+        res.Body = DashboardPage(s, q);
     }
 
     static string NewPath(string p)
@@ -179,7 +185,18 @@ class AcmpWeb
     {
         if (string.IsNullOrEmpty(n)) return "/dashboard";
         string p = PathOnly(n);
-        return IsWebPath(p) ? NewPath(p) : "/dashboard";
+        return IsWebPath(p) ? NewPath(p) + KeepQuery(p, n) : "/dashboard";
+    }
+
+    // Nur die Rollout-Seite behaelt ihre Abfrage ueber den Login (Links aus offenen Punkten); nur harmlose Zeichen, sonst ohne Abfrage
+    static readonly Regex SafeQueryRe = new Regex(@"^\?[A-Za-z0-9_.~%=&+:,\-]{1,300}$");
+    static string KeepQuery(string path, string pathQuery)
+    {
+        if (path != RolloutPath || pathQuery == null) return "";
+        int i = pathQuery.IndexOf('?');
+        if (i < 0) return "";
+        string qs = pathQuery.Substring(i);
+        return SafeQueryRe.IsMatch(qs) ? qs : "";
     }
 
     // ---------- Anmeldung und Sitzungen ----------
@@ -326,6 +343,7 @@ class AcmpWeb
              + ".btn-ghost{background:#f6f8fb;color:#0a0a0a;border:1px solid rgba(10,15,35,.15);box-shadow:none}.btn-ghost:hover{background:#eef2f7;text-decoration:none}"
              + ".foot{margin-top:54px;padding-top:18px;border-top:1px solid rgba(10,15,35,.08);color:#9aa3ab;font-size:12.5px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}.foot b{color:#7a838c}"
              + "@media(max-width:680px){.nav .who{display:none}.navlink{padding:8px 10px}input[type=text],input[type=password],input:not([type]){width:100%}}"
+             + DashboardCss + RolloutCss + WumCss
              + "</style></head><body><div class=\"wrap\">" + header + inner + Footer() + "</div></body></html>";
     }
 
@@ -338,7 +356,9 @@ class AcmpWeb
         var sb = new StringBuilder();
         sb.Append("<div class=\"nav\">");
         sb.Append("<a class=\"logo\" href=\"/dashboard\" style=\"text-decoration:none\">ACMP <span>MCP</span></a>");
-        sb.Append(NavLink("/dashboard", "Übersicht", "dashboard", active));
+        sb.Append(NavLink("/dashboard", "Dashboard", "dashboard", active));
+        sb.Append(NavLink(UpdatesPath, "Updates", "updates", active));
+        sb.Append(NavLink(RolloutPath, "Rollouts", "rollout", active));
         sb.Append(NavLink("/activity", "Aktivität", "activity", active));
         sb.Append(NavLink("/settings", "Einstellungen", "settings", active));
         sb.Append(NavLink("/onboarding", "Onboarding", "onboarding", active));
@@ -364,7 +384,7 @@ class AcmpWeb
 
     string Notice(WebSession s, string title, string msg, string active)
     {
-        return PageNav(s, "<h1>" + Esc(title) + "</h1><p>" + Esc(msg) + "</p><p><a href=\"/dashboard\">&larr; Zur Übersicht</a></p>", active);
+        return PageNav(s, "<h1>" + Esc(title) + "</h1><p>" + Esc(msg) + "</p><p><a href=\"/dashboard\">&larr; Zum Dashboard</a></p>", active);
     }
 
     static string Card(string href, string cls, string k, string v, string s)
@@ -402,54 +422,7 @@ class AcmpWeb
         return Page(sb.ToString());
     }
 
-    // ---------- Uebersicht ----------
-    string DashboardPage(WebSession s)
-    {
-        List<JObject> recent = _act.Recent(3000);
-        string today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        string weekStart = DateTime.Now.AddDays(-6).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        int nToday = 0, errToday = 0, nWeek = 0, errWeek = 0;
-        var usersToday = new List<string>();
-        foreach (JObject e in recent)
-        {
-            if ((string)e["kind"] == "Webseite") continue;
-            string z = e["zeit"] != null ? (string)e["zeit"] : "";
-            bool ok = (e["ok"] != null && (bool)e["ok"]) || (e["pending"] != null && (bool)e["pending"]);
-            if (string.CompareOrdinal(z, weekStart) >= 0) { nWeek++; if (!ok) errWeek++; }
-            if (z.StartsWith(today))
-            {
-                nToday++; if (!ok) errToday++;
-                string u = (string)e["user"]; if (u != null && !usersToday.Contains(u)) usersToday.Add(u);
-            }
-        }
-        int toolCount = 0, writeTools = 0;
-        JArray all = GetAllTools != null ? GetAllTools() : null;
-        if (all != null) foreach (JToken t in all) { toolCount++; if (WriteTierOf != null && WriteTierOf((string)t["name"]) != null) writeTools++; }
-        JObject brake = _act.BrakeInfo();
-
-        var sb = new StringBuilder();
-        sb.Append(BrakeBanner());
-        sb.Append("<h1>Übersicht</h1><p>Willkommen, <b>").Append(Esc(s.Name)).Append("</b>. Was über den ACMP-MCP-Server geändert wurde, auf einen Blick.</p>");
-        sb.Append("<div class=\"cards\">");
-        sb.Append(Card("/settings", brake != null ? "alert" : "ok", "Notbremse", brake != null ? "GEZOGEN" : "aus",
-            brake != null ? "Schreib-Tools gesperrt" : "Schreib-Tools frei"));
-        sb.Append(Card("/activity", null, "Schreibaktionen heute", nToday.ToString(), errToday > 0 ? errToday + " mit Fehler" : "ohne Fehler"));
-        sb.Append(Card("/activity", errWeek > 0 ? "warnc" : null, "Letzte 7 Tage", nWeek.ToString(), errWeek > 0 ? errWeek + " mit Fehler" : "ohne Fehler"));
-        sb.Append(Card("/activity", "compact", "Bediener heute", usersToday.Count > 0 ? usersToday.Count.ToString() : "–", usersToday.Count > 0 ? string.Join(", ", usersToday.ToArray()) : "noch niemand"));
-        sb.Append(Card("/settings", null, "Tools", toolCount.ToString(), writeTools + " davon schreiben"));
-        JArray cl = LoadChangelog();
-        if (cl.Count > 0)
-        {
-            JObject last = cl[0] as JObject;
-            sb.Append(Card("/changelog", "compact", "Letztes Update", last != null && last["date"] != null ? (string)last["date"] : "–", last != null && last["title"] != null ? (string)last["title"] : ""));
-        }
-        sb.Append("</div>");
-
-        sb.Append("<h2>Letzte Aktivität</h2>");
-        sb.Append(ActivityTable(recent, 12, false));
-        sb.Append("<p><a href=\"/activity\">Gesamtes Aktivitätsprotokoll &rarr;</a></p>");
-        return PageNav(s, sb.ToString(), "dashboard");
-    }
+    // ---------- Startseite (Lagebild): AcmpWebDashboard.cs ----------
 
     // ---------- Aktivitaet ----------
     string ActivityPage(WebSession s, Dictionary<string, string> q)
@@ -699,7 +672,7 @@ class AcmpWeb
         sb.Append("<form method=\"post\" action=\"/onboarding-create\">").Append(CsrfField(s));
         sb.Append("<p>Kurzname (für Protokoll und Logs, z.B. <code>mmustermann</code>):<br><input type=\"text\" name=\"name\" pattern=\"[A-Za-z0-9_.-]{2,32}\" required></p>");
         sb.Append("<p>Lokaler ACMP-Username (in ACMP schon angelegt, z.B. <code>admin_mm</code>):<br><input type=\"text\" name=\"acmpUser\" pattern=\"[A-Za-z0-9_.-]{2,32}\" required></p>");
-        sb.Append("<p><label><input type=\"checkbox\" name=\"web\" value=\"1\" checked> Zugang zu dieser Weboberfläche (Übersicht, Aktivität, Notbremse, Onboarding)</label></p>");
+        sb.Append("<p><label><input type=\"checkbox\" name=\"web\" value=\"1\" checked> Zugang zu dieser Weboberfläche (Dashboard, Aktivität, Notbremse, Onboarding)</label></p>");
         sb.Append("<p class=\"actions\"><button class=\"btn btn-primary\" type=\"submit\">Anlegen</button></p>");
         sb.Append("</form>");
         return PageNav(s, sb.ToString(), "onboarding");

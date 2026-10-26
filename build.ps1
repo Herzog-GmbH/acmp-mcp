@@ -30,7 +30,10 @@ Write-Host "Baue $serverOut ..." -ForegroundColor Cyan
   (Join-Path $src "AcmpCcFolders.cs") (Join-Path $src "AcmpCcRelease.cs") (Join-Path $src "AcmpCcVersion.cs") `
   (Join-Path $src "AcmpKiosk.cs") (Join-Path $src "AcmpKioskImages.cs") (Join-Path $src "AcmpKioskUpdate.cs") (Join-Path $src "AcmpKioskGroup.cs") `
   (Join-Path $src "AcmpWum.cs") (Join-Path $src "AcmpUnix.cs") (Join-Path $src "AcmpCcParams.cs") (Join-Path $src "AcmpCustomFields.cs") `
-  (Join-Path $src "AcmpJobs.cs") (Join-Path $src "AcmpJobsWriter.cs")
+  (Join-Path $src "AcmpJobs.cs") (Join-Path $src "AcmpJobsWriter.cs") (Join-Path $src "AcmpFilterSql.cs") (Join-Path $src "AcmpContainerFilter.cs") `
+  (Join-Path $src "AcmpMsw.cs") (Join-Path $src "AcmpOpenItems.cs") (Join-Path $src "AcmpDashboard.cs") (Join-Path $src "AcmpWebDashboard.cs") `
+  (Join-Path $src "AcmpRollout.cs") (Join-Path $src "AcmpWebRollout.cs") (Join-Path $src "AcmpWumRings.cs") (Join-Path $src "AcmpWumWatch.cs") `
+  (Join-Path $src "AcmpWebWum.cs") (Join-Path $src "AcmpLuecken.cs") (Join-Path $src "AcmpLueckenApi.cs") (Join-Path $src "AcmpLueckenWrite.cs")
 if ($LASTEXITCODE -ne 0) { throw "Build AcmpMcpServer fehlgeschlagen (exit $LASTEXITCODE)" }
 
 $tokenOut = Join-Path $OutDir "acmp-token-setup.exe"

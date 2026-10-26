@@ -2,6 +2,10 @@
 
 Gilt nur für die Erweiterung (`acmp-mcp-<version>.mcpb`), also die Verbindung von Claude Desktop zum ACMP-MCP-Server. Änderungen am Server selbst zeigt dessen Seite `/changelog`.
 
+## 1.2.0 – 2026-10-26
+
+- Beschreibung und Beispiel-Tools für den Server-Stand vom 26.10.2026 (179 Tools, u. a. Managed Software, Fehler-Stopp der Windows-Updates, Container-Filter, Schritt-Protokoll). Die Brücke selbst ist unverändert; die neuen Tools holt sie wie bisher vom Server.
+
 ## 1.1.0 – 2026-10-22
 
 - Beschreibung für Server-Version 2: keine Vier-Augen-Freigabe mehr, stattdessen Aktivitätsprotokoll und Notbremse. `acmp_approval_status` steht nicht mehr in der Tool-Liste. Die Brücke selbst ist unverändert.

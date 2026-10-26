@@ -396,9 +396,10 @@ class AcmpWum
         {
             var kq = c.CreateCommand();
             kq.CommandText =
-                "SELECT TOP 5 (SELECT TOP 1 l.Name FROM SYS_Wum_Updates_Localization l WHERE l.Id = u.Id) FROM Sys_Wum_Updates u " +
+                // 25.10.2026: vorher TOP 5 ohne Sortierung (ein aktuelles CU fehlte); jetzt alle bis 20, neueste zuerst
+                "SELECT TOP 20 (SELECT TOP 1 l.Name FROM SYS_Wum_Updates_Localization l WHERE l.Id = u.Id) FROM Sys_Wum_Updates u " +
                 "WHERE u.KBId = @kb AND u.Id <> @id AND u.IsDeclined = 0 AND u.IsSuperseded = 0 AND u.IsExpired = 0 " +
-                "AND u.RevisionNumber = (SELECT MAX(x.RevisionNumber) FROM Sys_Wum_Updates x WHERE x.Id = u.Id)";
+                "AND u.RevisionNumber = (SELECT MAX(x.RevisionNumber) FROM Sys_Wum_Updates x WHERE x.Id = u.Id) ORDER BY u.CreationDate DESC, 1";
             kq.Parameters.AddWithValue("@kb", (int)o["kb"]); kq.Parameters.AddWithValue("@id", G(id));
             using (var r = kq.ExecuteReader()) while (r.Read()) sames.Add(r.IsDBNull(0) ? "(ohne Namen)" : r.GetString(0));
         }
