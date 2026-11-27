@@ -112,8 +112,8 @@
     },
     {
         "name":  "acmp_job_results",
-        "description":  "Job-/Command-Ergebnisse je Client: zeigt pro Client alle Jobauslaeufe aus SYS_Jobs_Logs_Items (mit Jobname/Ausloeser aus SYS_Jobs_Logs) inkl. menschenlesbarem Ausfuehrungs-Status und Ergebnis sowie der letzten Statusmeldung. Optional auf Jobs mit Namensteil @name filterbar. Ideal fuer \u0027Wie ist Job X auf Client Y gelaufen?\u0027 und \u0027Welche Jobs sind fehlgeschlagen?\u0027.",
-        "sql":  "SELECT TOP (500) l.JobName AS JobName, i.ComputerName AS Computer, CASE i.State WHEN 0 THEN \u0027Wartend\u0027 WHEN 1 THEN \u0027Zugewiesen\u0027 WHEN 2 THEN \u0027Laeuft\u0027 WHEN 3 THEN \u0027Abgeschlossen\u0027 WHEN 4 THEN \u0027Abgebrochen\u0027 WHEN 5 THEN \u0027Timeout/Fehler\u0027 ELSE \u0027Status \u0027+CAST(i.State AS varchar(10)) END AS Status, CASE i.Result WHEN 0 THEN \u0027Offen\u0027 WHEN 1 THEN \u0027Erfolg\u0027 WHEN 2 THEN \u0027Warnung/Fehlgeschlagen\u0027 WHEN 3 THEN \u0027Fehler\u0027 ELSE \u0027Ergebnis \u0027+CAST(i.Result AS varchar(10)) END AS Ergebnis, i.StateMsg AS Meldung, l.CreatorName AS Ausgeloest_von, CONVERT(varchar(19), DATEADD(day, -2, CAST(i.LastActivity AS datetime)), 120) AS Letzte_Aktivitaet, l.TestRing AS TestRing FROM SYS_Jobs_Logs_Items i JOIN SYS_Jobs_Logs l ON l.JobId = i.JobId WHERE i.ClientId = @client AND (@name IS NULL OR l.JobName LIKE \u0027%\u0027+@name+\u0027%\u0027) ORDER BY i.LastActivity DESC",
+        "description":  "Job-/Command-Ergebnisse je Client: zeigt pro Client alle Jobauslaeufe aus SYS_Jobs_Logs_Items (mit Jobname/Ausloeser aus SYS_Jobs_Logs) inkl. menschenlesbarem Ausfuehrungs-Status und Ergebnis sowie der letzten Statusmeldung und - falls vorhanden - dem ersten fehlgeschlagenen Teilschritt (Teilfehler, Fehlerart). Alle Teilschritte mit Fehlermeldung: acmp_job_subitems. Optional auf Jobs mit Namensteil @name filterbar. Ideal fuer \u0027Wie ist Job X auf Client Y gelaufen?\u0027 und \u0027Welche Jobs sind fehlgeschlagen?\u0027.",
+        "sql":  "SELECT TOP (500) l.JobName AS JobName, i.ComputerName AS Computer, CASE i.State WHEN 0 THEN \u0027Wartend\u0027 WHEN 1 THEN \u0027Zugewiesen\u0027 WHEN 2 THEN \u0027Laeuft\u0027 WHEN 3 THEN \u0027Abgeschlossen\u0027 WHEN 4 THEN \u0027Abgebrochen\u0027 WHEN 5 THEN \u0027Timeout/Fehler\u0027 ELSE \u0027Status \u0027+CAST(i.State AS varchar(10)) END AS Status, CASE i.Result WHEN 0 THEN \u0027Offen\u0027 WHEN 1 THEN \u0027Erfolg\u0027 WHEN 2 THEN \u0027Warnung/Fehlgeschlagen\u0027 WHEN 3 THEN \u0027Fehler\u0027 ELSE \u0027Ergebnis \u0027+CAST(i.Result AS varchar(10)) END AS Ergebnis, i.StateMsg AS Meldung, tf.Teilschritt AS Teilfehler_Schritt, tf.Fehlermeldung AS Teilfehler, tf.Fehlerart AS Fehlerart, l.CreatorName AS Ausgeloest_von, CONVERT(varchar(19), DATEADD(day, -2, CAST(i.LastActivity AS datetime)), 120) AS Letzte_Aktivitaet, l.TestRing AS TestRing FROM SYS_Jobs_Logs_Items i JOIN SYS_Jobs_Logs l ON l.JobId = i.JobId OUTER APPLY (SELECT TOP (1) s.NativeMessage AS Teilschritt, LEFT(s.NativeErrorMessage, 500) AS Fehlermeldung, f.Fehlerart FROM SYS_Jobs_Logs_SubItems s CROSS APPLY (SELECT CASE WHEN s.Result = 1 OR (ISNULL(s.NativeErrorMessage, \u0027\u0027) = \u0027\u0027 AND s.Result <> 2) THEN NULL WHEN s.NativeErrorMessage LIKE \u0027%Blocked because of running applications%\u0027 OR s.NativeErrorMessage LIKE \u0027%Failed to lock package%\u0027 THEN \u0027voruebergehend: Anwendung offen\u0027 WHEN s.NativeErrorMessage LIKE \u0027%reboot%\u0027 OR s.NativeErrorMessage LIKE \u0027%restart required%\u0027 OR s.NativeErrorMessage LIKE \u0027%Neustart%\u0027 THEN \u0027voruebergehend: Neustart ausstehend\u0027 ELSE \u0027echter Fehler\u0027 END AS Fehlerart) f WHERE s.ParentExecId = i.ExecId AND f.Fehlerart IS NOT NULL ORDER BY CASE WHEN f.Fehlerart = \u0027echter Fehler\u0027 THEN 0 ELSE 1 END, s.StartDate) tf WHERE i.ClientId = @client AND (@name IS NULL OR l.JobName LIKE \u0027%\u0027+@name+\u0027%\u0027) ORDER BY i.LastActivity DESC",
         "args":  [
                      {
                          "name":  "client",
@@ -126,6 +126,37 @@
                          "required":  false,
                          "kind":  "string",
                          "description":  "Optionaler Teilstring des Jobnamens (LIKE %name%); NULL = alle Jobs des Clients."
+                     }
+                 ]
+    },
+    {
+        "name":  "acmp_job_subitems",
+        "description":  "Teilschritte der Job-Laeufe je Client wie in der ACMP-Console unter \u0027Untergeordnete Log-Elemente des Jobs\u0027 (SYS_Jobs_Logs_SubItems, ParentExecId = SYS_Jobs_Logs_Items.ExecId): Beschreibung (z.B. \u0027Scannen von Windows Updates\u0027, einzelne Updates), Start, Ende, Ergebnis, Fehlermeldung im Klartext, Fehlercode und Verteilungsring. Spalte Fehlerart ordnet Fehler ein: \u0027voruebergehend: Anwendung offen\u0027 (z.B. M365-Update \u0027Failed to lock package / Blocked because of running applications\u0027), \u0027voruebergehend: Neustart ausstehend\u0027 oder \u0027echter Fehler\u0027. Ideal fuer \u0027Warum zeigt Job X auf Client Y Fehler?\u0027, v.a. bei Windows-Update-Jobs (WUM), wo acmp_job_results nur \u0027Fehler\u0027 ohne Text liefert.",
+        "sql":  "SELECT TOP (1000) i.ComputerName AS Computer, l.JobName AS Job, CONVERT(varchar(19), DATEADD(day, -2, CAST(i.StartedDate AS datetime)), 120) AS Lauf_Start, CASE i.Result WHEN 0 THEN \u0027Offen\u0027 WHEN 1 THEN \u0027Erfolg\u0027 WHEN 2 THEN \u0027Fehlgeschlagen\u0027 WHEN 3 THEN \u0027Fehler\u0027 ELSE \u0027Ergebnis \u0027+CAST(i.Result AS varchar(10)) END AS Lauf_Ergebnis, s.NativeMessage AS Beschreibung, CONVERT(varchar(19), DATEADD(day, -2, CAST(s.StartDate AS datetime)), 120) AS Startdatum, CONVERT(varchar(19), DATEADD(day, -2, CAST(s.EndDate AS datetime)), 120) AS Enddatum, CASE s.Result WHEN 0 THEN \u0027Offen\u0027 WHEN 1 THEN \u0027Erfolg\u0027 WHEN 2 THEN \u0027Fehlgeschlagen\u0027 WHEN 3 THEN \u0027Fehler\u0027 ELSE \u0027Ergebnis \u0027+CAST(s.Result AS varchar(10)) END AS Ergebnis, s.Result AS ErgebnisCode, s.NativeErrorMessage AS Fehlermeldung, s.ErrorCode AS Fehlercode, f.Fehlerart AS Fehlerart, s.TestRing AS Verteilungsring FROM SYS_Jobs_Logs_SubItems s JOIN SYS_Jobs_Logs_Items i ON i.ExecId = s.ParentExecId JOIN SYS_Jobs_Logs l ON l.JobId = i.JobId CROSS APPLY (SELECT CASE WHEN s.Result = 1 OR (ISNULL(s.NativeErrorMessage, \u0027\u0027) = \u0027\u0027 AND s.Result <> 2) THEN NULL WHEN s.NativeErrorMessage LIKE \u0027%Blocked because of running applications%\u0027 OR s.NativeErrorMessage LIKE \u0027%Failed to lock package%\u0027 THEN \u0027voruebergehend: Anwendung offen\u0027 WHEN s.NativeErrorMessage LIKE \u0027%reboot%\u0027 OR s.NativeErrorMessage LIKE \u0027%restart required%\u0027 OR s.NativeErrorMessage LIKE \u0027%Neustart%\u0027 THEN \u0027voruebergehend: Neustart ausstehend\u0027 ELSE \u0027echter Fehler\u0027 END AS Fehlerart) f WHERE i.ClientId = @client AND (@name IS NULL OR l.JobName LIKE \u0027%\u0027+@name+\u0027%\u0027) AND ISNULL(s.StartDate, i.LastActivity) >= CAST(DATEADD(day, -ISNULL(@days, 7), GETDATE()) AS float) + 2 AND (ISNULL(@onlyErrors, 0) = 0 OR f.Fehlerart IS NOT NULL) ORDER BY i.StartedDate DESC, s.StartDate",
+        "args":  [
+                     {
+                         "name":  "client",
+                         "required":  true,
+                         "kind":  "client",
+                         "description":  "Computername; der Host loest ihn zur ClientId-GUID auf (verglichen gegen SYS_Jobs_Logs_Items.ClientId)."
+                     },
+                     {
+                         "name":  "name",
+                         "required":  false,
+                         "kind":  "string",
+                         "description":  "Optionaler Teilstring des Jobnamens (LIKE %name%), z.B. \u0027Client - Standard\u0027; NULL = alle Jobs."
+                     },
+                     {
+                         "name":  "days",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "Zeitraum in Tagen (Start des Teilschritts), Standard 7."
+                     },
+                     {
+                         "name":  "onlyErrors",
+                         "required":  false,
+                         "kind":  "int",
+                         "description":  "1 = nur Teilschritte mit Fehler (Fehlerart gesetzt), 0/NULL = alle."
                      }
                  ]
     },
@@ -917,4 +948,4 @@
 
                  ]
     }
-]
+]
